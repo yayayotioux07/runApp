@@ -1,0 +1,37 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --warm: #E84545;
+  --run: #2ECC71;
+  --walk: #F4D03F;
+  --cooldown: #3498DB;
+  --5k-color: #2ECC71;
+  --10k-color: #3498DB;
+  --21k-color: #9B59B6;
+  --dark: #1a1a2e;
+  --text: #ffffff;
+}
+
+html, body, #root {
+  height: 100%;
+  font-family: 'DM Sans', 'Segoe UI', sans-serif;
+  background: #1a1a2e;
+  color: #ffffff;
+  overflow-x: hidden;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  outline: none;
+  font-family: inherit;
+}
+
+a {
+  text-decoration: none;
+  color: inherit;
+}
