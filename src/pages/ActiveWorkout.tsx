@@ -2,8 +2,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { GoalKey, goalMeta, programs } from '../data/index'
 import { useTimer } from '../hooks/useTimer'
 import { useProgress } from '../hooks/useProgress'
-import SegmentBar from '../components/SegmentBar'
-import { useCallback } from 'react'
+import { useCallback, useState, useEffect, useRef } from 'react'
 
 const segmentColors: Record<string, string> = {
   warmup:   '#E84545',
@@ -12,11 +11,8 @@ const segmentColors: Record<string, string> = {
   cooldown: '#3498DB',
 }
 
-const segmentEmoji: Record<string, string> = {
-  warmup:   '🚶',
-  run:      '🏃',
-  walk:     '🚶',
-  cooldown: '😮‍💨',
+const segmentTextColors: Record<string, string> = {
+  walk: '#333',
 }
 
 function formatTime(secs: number): string {
@@ -25,10 +21,20 @@ function formatTime(secs: number): string {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }
 
+function formatMins(secs: number): string {
+  const m = Math.floor(secs / 60)
+  const s = secs % 60
+  if (s === 0) return `${m}:00`
+  return `${m}:${String(s).padStart(2, '0')}`
+}
+
 export default function ActiveWorkout() {
   const { goal, week, day } = useParams<{ goal: GoalKey; week: string; day: string }>()
   const navigate = useNavigate()
   const { markComplete } = useProgress()
+  const [locked, setLocked] = useState(false)
+  const [elapsedTotal, setElapsedTotal] = useState(0)
+  const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const key = goal as GoalKey
   const weekNum = parseInt(week ?? '1')
@@ -43,36 +49,98 @@ export default function ActiveWorkout() {
     markComplete(key, weekNum, dayNum)
   }, [key, weekNum, dayNum, markComplete])
 
-  const { currentSegment, segmentIndex, timeLeft, isRunning, isFinished, progress, start, pause, resume, reset } =
-    useTimer(dayData?.segments ?? [], handleComplete)
+  const {
+    currentSegment,
+    segmentIndex,
+    timeLeft,
+    isRunning,
+    isFinished,
+    start,
+    pause,
+    resume,
+    reset,
+    skipNext,
+    skipPrev,
+  } = useTimer(dayData?.segments ?? [], handleComplete)
 
-  if (!meta || !dayData) {
-    navigate('/')
-    return null
-  }
+  // Track total elapsed time
+  useEffect(() => {
+    if (isRunning) {
+      elapsedRef.current = setInterval(() => setElapsedTotal(t => t + 1), 1000)
+    } else {
+      if (elapsedRef.current) clearInterval(elapsedRef.current)
+    }
+    return () => { if (elapsedRef.current) clearInterval(elapsedRef.current) }
+  }, [isRunning])
+
+  if (!meta || !dayData) { navigate('/'); return null }
 
   const segColor = segmentColors[currentSegment?.type ?? 'run'] ?? '#2ECC71'
-  const emoji = segmentEmoji[currentSegment?.type ?? 'run'] ?? '🏃'
+  const segTextColor = segmentTextColors[currentSegment?.type ?? 'run'] ?? '#fff'
+  const nextSeg = dayData.segments[segmentIndex + 1]
+  const totalWorkoutSecs = dayData.segments.reduce((a, s) => a + s.duration, 0)
+  const timeLeftTotal = totalWorkoutSecs - elapsedTotal
+
+  const segDuration = currentSegment?.duration ?? 1
+  const segElapsed = segDuration - timeLeft
+  const segProgress = Math.min(segElapsed / segDuration, 1)
+
+  const segMins = Math.ceil(segDuration / 60)
+  const markers = Array.from({ length: segMins - 1 }, (_, i) => i + 1)
+
+  const hasStarted = !(segmentIndex === 0 && timeLeft === (dayData.segments[0]?.duration ?? 0) && !isRunning)
 
   return (
-    <div style={{ ...styles.container, background: `linear-gradient(160deg, ${segColor}22, #0f0c29 60%)` }}>
-      {/* Header */}
-      <div style={styles.header}>
-        <button style={styles.backBtn} onClick={() => navigate(`/workout/${key}/${weekNum}/${dayNum}`)}>✕</button>
-        <span style={styles.headerTitle}>Week {weekNum} · Day {dayNum}</span>
-        <button style={styles.resetBtn} onClick={reset}>↺</button>
+    <div style={styles.container}>
+      {/* Blurred scene background */}
+      <div style={styles.sceneBg} />
+
+      {/* Top bar */}
+      <div style={styles.topBar}>
+        <button style={styles.topBtn} onClick={() => navigate(`/workout/${key}/${weekNum}/${dayNum}`)}>✕</button>
+        <button style={styles.topBtn} onClick={() => { reset(); setElapsedTotal(0) }}>↺</button>
+        <button style={styles.topBtn}>♪</button>
       </div>
 
-      {/* Segment bar */}
-      <SegmentBar segments={dayData.segments} activeIndex={segmentIndex} />
-
-      {/* Overall progress bar */}
-      <div style={styles.overallBarWrap}>
-        <div style={{ ...styles.overallBarFill, width: `${progress * 100}%`, background: segColor }} />
+      {/* Segment name + countdown */}
+      <div style={styles.segmentHeader}>
+        <span style={styles.segmentTitle}>
+          {currentSegment?.label?.toUpperCase()} {formatTime(timeLeft)}
+        </span>
       </div>
 
-      {/* Main display */}
-      <div style={styles.main}>
+      {/* Segment progress bar */}
+      <div style={{ ...styles.segBarWrap, background: segColor }}>
+        <div style={{ ...styles.segBarFill, width: `${segProgress * 100}%` }} />
+        {markers.map(m => (
+          <div key={m} style={{ ...styles.segMarker, left: `${(m / segMins) * 100}%` }}>
+            <div style={styles.segMarkerLine} />
+            <span style={{ ...styles.segMarkerLabel, color: segTextColor }}>{m}</span>
+          </div>
+        ))}
+        <div style={{ ...styles.segDot, left: `${segProgress * 100}%` }} />
+      </div>
+
+      {/* Stats row: SINCE START · NEXT · TIME LEFT */}
+      <div style={styles.statsRow}>
+        <div style={styles.statItem}>
+          <span style={styles.statLabel}>{'SINCE\nSTART'}</span>
+          <span style={styles.statValue}>{formatTime(elapsedTotal)}</span>
+        </div>
+        <div style={styles.statDivider} />
+        <div style={styles.statItem}>
+          <span style={styles.statLabel}>{`NEXT:\n${nextSeg ? nextSeg.label.toUpperCase() : 'DONE'}`}</span>
+          <span style={styles.statValue}>{nextSeg ? formatMins(nextSeg.duration) : '—'}</span>
+        </div>
+        <div style={styles.statDivider} />
+        <div style={styles.statItem}>
+          <span style={styles.statLabel}>{'TIME\nLEFT'}</span>
+          <span style={styles.statValue}>{formatTime(Math.max(0, timeLeftTotal))}</span>
+        </div>
+      </div>
+
+      {/* Scene middle — lock button or finished */}
+      <div style={styles.sceneMiddle}>
         {isFinished ? (
           <div style={styles.finishedWrap}>
             <div style={styles.finishedEmoji}>🎉</div>
@@ -86,61 +154,54 @@ export default function ActiveWorkout() {
             </button>
           </div>
         ) : (
-          <>
-            {/* Segment label */}
-            <div style={styles.segmentLabel}>
-              <span style={{ ...styles.segmentDot, background: segColor }} />
-              <span style={{ ...styles.segmentName, color: segColor }}>
-                {currentSegment?.label?.toUpperCase()}
-              </span>
-            </div>
-
-            {/* Runner emoji */}
-            <div style={{
-              ...styles.runnerEmoji,
-              animationName: isRunning ? (currentSegment?.type === 'run' ? 'bob' : 'sway') : 'none',
-            }}>
-              {emoji}
-            </div>
-
-            {/* Timer */}
-            <div style={styles.timer}>{formatTime(timeLeft)}</div>
-
-            {/* Segment count */}
-            <div style={styles.segCount}>
-              Segment {segmentIndex + 1} of {dayData.segments.length}
-            </div>
-
-            {/* Controls */}
-            <div style={styles.controls}>
-              {!isRunning && segmentIndex === 0 && timeLeft === (dayData.segments[0]?.duration ?? 0) ? (
-                <button style={{ ...styles.mainBtn, background: segColor }} onClick={start}>
-                  START
-                </button>
-              ) : isRunning ? (
-                <button style={{ ...styles.mainBtn, background: 'rgba(255,255,255,0.15)' }} onClick={pause}>
-                  PAUSE
-                </button>
-              ) : (
-                <button style={{ ...styles.mainBtn, background: segColor }} onClick={resume}>
-                  RESUME
-                </button>
-              )}
-            </div>
-          </>
+          <button
+            style={{
+              ...styles.lockBtn,
+              background: locked ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.35)',
+              borderColor: locked ? '#fff' : 'rgba(255,255,255,0.5)',
+            }}
+            onClick={() => setLocked(l => !l)}
+            title={locked ? 'Tap to unlock' : 'Tap to lock screen'}
+          >
+            <span style={styles.lockIcon}>{locked ? '🔒' : '🔓'}</span>
+          </button>
         )}
       </div>
 
-      <style>{`
-        @keyframes bob {
-          0%, 100% { transform: translateY(0); }
-          50% { transform: translateY(-10px); }
-        }
-        @keyframes sway {
-          0%, 100% { transform: translateY(0) rotate(-2deg); }
-          50% { transform: translateY(-4px) rotate(2deg); }
-        }
-      `}</style>
+      {/* Bottom controls: « PAUSE/RESUME » */}
+      {!isFinished && (
+        <div style={styles.bottomBar}>
+          <button
+            style={styles.skipBtn}
+            onClick={() => { if (!locked) skipPrev() }}
+            disabled={locked || segmentIndex === 0}
+          >
+            <span style={{ opacity: (locked || segmentIndex === 0) ? 0.25 : 1 }}>«</span>
+          </button>
+
+          <button
+            style={styles.pauseBtn}
+            onClick={() => {
+              if (locked) return
+              if (!hasStarted) start()
+              else if (isRunning) pause()
+              else resume()
+            }}
+          >
+            <span style={{ opacity: locked ? 0.25 : 1 }}>
+              {!hasStarted ? 'START' : isRunning ? 'PAUSE' : 'RESUME'}
+            </span>
+          </button>
+
+          <button
+            style={styles.skipBtn}
+            onClick={() => { if (!locked) skipNext() }}
+            disabled={locked || segmentIndex >= dayData.segments.length - 1}
+          >
+            <span style={{ opacity: (locked || segmentIndex >= dayData.segments.length - 1) ? 0.25 : 1 }}>»</span>
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -152,126 +213,198 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: 'column',
     fontFamily: "'DM Sans', sans-serif",
     color: '#fff',
-    transition: 'background 1s ease',
+    position: 'relative',
+    overflow: 'hidden',
   },
-  header: {
+  sceneBg: {
+    position: 'absolute',
+    inset: 0,
+    background: 'linear-gradient(180deg, #3a8fa8 0%, #87CEEB 30%, #5a9e3a 65%, #3a7020 100%)',
+    filter: 'blur(3px)',
+    transform: 'scale(1.05)',
+    zIndex: 0,
+  },
+  topBar: {
+    position: 'relative',
+    zIndex: 2,
     display: 'flex',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    padding: '16px 20px',
+    alignItems: 'center',
+    padding: '16px 24px',
+    background: 'rgba(58,143,168,0.55)',
   },
-  backBtn: {
+  topBtn: {
     background: 'transparent',
-    color: 'rgba(255,255,255,0.6)',
+    color: 'rgba(255,255,255,0.8)',
     fontSize: '20px',
     width: '36px',
     height: '36px',
-    borderRadius: '50%',
-    border: '1px solid rgba(255,255,255,0.2)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerTitle: {
-    fontSize: '14px',
-    fontWeight: '600',
-    color: 'rgba(255,255,255,0.7)',
+  segmentHeader: {
+    position: 'relative',
+    zIndex: 2,
+    padding: '20px 24px 14px',
+    background: 'rgba(58,143,168,0.45)',
   },
-  resetBtn: {
-    background: 'transparent',
-    color: 'rgba(255,255,255,0.6)',
-    fontSize: '20px',
-    width: '36px',
-    height: '36px',
-    borderRadius: '50%',
-    border: '1px solid rgba(255,255,255,0.2)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
+  segmentTitle: {
+    fontSize: '36px',
+    fontWeight: '700',
+    letterSpacing: '1px',
+    color: '#fff',
   },
-  overallBarWrap: {
-    height: '3px',
-    background: 'rgba(255,255,255,0.1)',
+  segBarWrap: {
+    position: 'relative',
+    zIndex: 2,
+    height: '80px',
     width: '100%',
+    overflow: 'hidden',
+    transition: 'background 0.6s ease',
   },
-  overallBarFill: {
+  segBarFill: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
     height: '100%',
-    transition: 'width 1s linear, background 1s ease',
-    borderRadius: '2px',
+    background: 'rgba(0,0,0,0.18)',
+    transition: 'width 1s linear',
   },
-  main: {
+  segMarker: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    transform: 'translateX(-50%)',
+    pointerEvents: 'none',
+  },
+  segMarkerLine: {
+    width: '1px',
+    flex: 1,
+    background: 'rgba(255,255,255,0.35)',
+  },
+  segMarkerLabel: {
+    fontSize: '11px',
+    fontWeight: '600',
+    padding: '3px 0',
+  },
+  segDot: {
+    position: 'absolute',
+    bottom: 0,
+    width: '4px',
+    height: '22px',
+    background: '#fff',
+    borderRadius: '2px',
+    transform: 'translateX(-50%)',
+    transition: 'left 1s linear',
+    boxShadow: '0 0 8px rgba(255,255,255,0.9)',
+  },
+  statsRow: {
+    position: 'relative',
+    zIndex: 2,
+    display: 'flex',
+    background: 'rgba(0,0,0,0.38)',
+    backdropFilter: 'blur(8px)',
+    padding: '14px 0',
+  },
+  statItem: {
     flex: 1,
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
-    justifyContent: 'center',
-    padding: '20px',
-    gap: '16px',
+    gap: '5px',
   },
-  segmentLabel: {
+  statLabel: {
+    fontSize: '11px',
+    fontWeight: '700',
+    color: 'rgba(255,255,255,0.5)',
+    letterSpacing: '1px',
+    textAlign: 'center',
+    whiteSpace: 'pre',
+    lineHeight: 1.3,
+  },
+  statValue: {
+    fontSize: '26px',
+    fontWeight: '700',
+    fontVariantNumeric: 'tabular-nums',
+    lineHeight: 1,
+  },
+  statDivider: {
+    width: '1px',
+    background: 'rgba(255,255,255,0.12)',
+    margin: '4px 0',
+  },
+  sceneMiddle: {
+    flex: 1,
+    position: 'relative',
+    zIndex: 2,
     display: 'flex',
     alignItems: 'center',
-    gap: '8px',
+    justifyContent: 'center',
   },
-  segmentDot: {
-    width: '10px',
-    height: '10px',
+  lockBtn: {
+    width: '76px',
+    height: '76px',
     borderRadius: '50%',
+    border: '2px solid',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backdropFilter: 'blur(8px)',
+    transition: 'background 0.2s, border-color 0.2s',
+    cursor: 'pointer',
   },
-  segmentName: {
-    fontSize: '14px',
-    fontWeight: '700',
-    letterSpacing: '3px',
+  lockIcon: {
+    fontSize: '30px',
   },
-  runnerEmoji: {
-    fontSize: '72px',
-    animationDuration: '0.5s',
-    animationTimingFunction: 'ease-in-out',
-    animationIterationCount: 'infinite',
-    lineHeight: 1,
+  bottomBar: {
+    position: 'relative',
+    zIndex: 2,
+    display: 'flex',
+    alignItems: 'center',
+    background: 'rgba(0,0,0,0.5)',
+    backdropFilter: 'blur(10px)',
+    borderTop: '1px solid rgba(255,255,255,0.08)',
+    height: '72px',
   },
-  timer: {
-    fontSize: '80px',
-    fontWeight: '800',
-    fontVariantNumeric: 'tabular-nums',
-    letterSpacing: '-2px',
-    lineHeight: 1,
-  },
-  segCount: {
-    fontSize: '13px',
-    color: 'rgba(255,255,255,0.4)',
-    letterSpacing: '0.5px',
-  },
-  controls: {
-    marginTop: '12px',
-  },
-  mainBtn: {
-    padding: '18px 60px',
-    borderRadius: '50px',
-    fontSize: '18px',
-    fontWeight: '800',
-    letterSpacing: '3px',
+  skipBtn: {
+    flex: 1,
+    height: '100%',
+    background: 'transparent',
     color: '#fff',
-    border: 'none',
-    transition: 'transform 0.15s',
+    fontSize: '26px',
+    fontWeight: '700',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRight: '1px solid rgba(255,255,255,0.1)',
+  },
+  pauseBtn: {
+    flex: 2,
+    height: '100%',
+    background: 'transparent',
+    color: '#fff',
+    fontSize: '17px',
+    fontWeight: '800',
+    letterSpacing: '3px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRight: '1px solid rgba(255,255,255,0.1)',
   },
   finishedWrap: {
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
     gap: '12px',
+    padding: '20px',
   },
-  finishedEmoji: {
-    fontSize: '72px',
-  },
-  finishedTitle: {
-    fontSize: '32px',
-    fontWeight: '800',
-  },
-  finishedSub: {
-    fontSize: '16px',
-    color: 'rgba(255,255,255,0.5)',
-  },
+  finishedEmoji: { fontSize: '64px' },
+  finishedTitle: { fontSize: '28px', fontWeight: '800' },
+  finishedSub: { fontSize: '15px', color: 'rgba(255,255,255,0.5)' },
   finishBtn: {
     marginTop: '16px',
     padding: '16px 40px',
@@ -280,5 +413,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: '700',
     color: '#fff',
     letterSpacing: '1px',
+    border: 'none',
+    cursor: 'pointer',
   },
 }
