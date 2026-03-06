@@ -1,37 +1,19 @@
-*, *::before, *::after {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;0,9..40,800;1,9..40,400&display=swap');
 
-:root {
-  --warm: #E84545;
-  --run: #2ECC71;
-  --walk: #F4D03F;
-  --cooldown: #3498DB;
-  --5k-color: #2ECC71;
-  --10k-color: #3498DB;
-  --21k-color: #9B59B6;
-  --dark: #1a1a2e;
-  --text: #ffffff;
-}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 html, body, #root {
   height: 100%;
-  font-family: 'DM Sans', 'Segoe UI', sans-serif;
-  background: #1a1a2e;
-  color: #ffffff;
-  overflow-x: hidden;
+  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: #0D0D0D;
+  color: #fff;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-button {
-  cursor: pointer;
-  border: none;
-  outline: none;
-  font-family: inherit;
-}
+button { cursor: pointer; border: none; outline: none; font-family: inherit; }
+input  { font-family: inherit; }
+a      { text-decoration: none; color: inherit; }
 
-a {
-  text-decoration: none;
-  color: inherit;
-}
+::-webkit-scrollbar       { width: 0; height: 0; }
+::selection               { background: rgba(255,255,255,0.15); }

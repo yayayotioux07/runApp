@@ -7,15 +7,12 @@ const goals: GoalKey[] = ['5k', '10k', '21k']
 
 export default function Home() {
   const navigate = useNavigate()
-  const { profileName, setProfileName, setActiveGoal } = useProgress()
+  const { profileName, setProfileName, setActiveGoal, getNextWorkout } = useProgress()
   const [nameInput, setNameInput] = useState(profileName)
-  const [saved, setSaved] = useState(!!profileName)
+  const [saved, setSaved]         = useState(!!profileName)
 
   const handleSaveName = () => {
-    if (nameInput.trim()) {
-      setProfileName(nameInput.trim())
-      setSaved(true)
-    }
+    if (nameInput.trim()) { setProfileName(nameInput.trim()); setSaved(true) }
   }
 
   const handleGoalSelect = (goal: GoalKey) => {
@@ -24,58 +21,70 @@ export default function Home() {
   }
 
   return (
-    <div style={styles.container}>
-      {/* Header */}
-      <div style={styles.header}>
-        <div style={styles.logo}>🏃 RunUp</div>
-        <p style={styles.tagline}>From couch to finish line</p>
+    <div style={styles.page}>
+      {/* Logo */}
+      <div style={styles.logoWrap}>
+        <div style={styles.logoIcon}>▶</div>
+        <div style={styles.logoText}>RunUp</div>
+        <div style={styles.logoSub}>Your running journey starts here</div>
       </div>
 
-      {/* Profile Name */}
-      <div style={styles.profileSection}>
+      {/* Name */}
+      <div style={styles.section}>
         {!saved ? (
-          <div style={styles.nameForm}>
-            <p style={styles.namePrompt}>What should we call you?</p>
-            <div style={styles.nameInputRow}>
+          <div style={styles.nameCard}>
+            <p style={styles.namePrompt}>What's your name?</p>
+            <div style={styles.nameRow}>
               <input
                 style={styles.nameInput}
                 type="text"
-                placeholder="Your name..."
+                placeholder="Enter your name..."
                 value={nameInput}
                 onChange={e => setNameInput(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && handleSaveName()}
                 autoFocus
               />
-              <button style={styles.saveBtn} onClick={handleSaveName}>
-                Let's Go →
-              </button>
+              <button style={styles.saveBtn} onClick={handleSaveName}>→</button>
             </div>
           </div>
         ) : (
-          <div style={styles.greeting}>
-            <span style={styles.greetingText}>Hey, {profileName}! 👋</span>
+          <div style={styles.greetingRow}>
+            <div>
+              <div style={styles.greetingName}>Hey, {profileName}</div>
+              <div style={styles.greetingText}>Choose a goal to continue</div>
+            </div>
             <button style={styles.editBtn} onClick={() => setSaved(false)}>Edit</button>
           </div>
         )}
       </div>
 
-      {/* Goal Cards */}
-      <div style={styles.goalsSection}>
-        <p style={styles.goalsTitle}>Choose your goal</p>
-        <div style={styles.goalCards}>
+      {/* Goal cards */}
+      <div style={styles.section}>
+        <div style={styles.sectionLabel}>SELECT YOUR GOAL</div>
+        <div style={styles.goalList}>
           {goals.map(goal => {
             const meta = goalMeta[goal]
+            const next = getNextWorkout(goal, meta.weeks)
             return (
               <button
                 key={goal}
-                style={{ ...styles.goalCard, borderColor: meta.color }}
+                style={styles.goalCard}
                 onClick={() => handleGoalSelect(goal)}
               >
-                <div style={styles.goalEmoji}>{meta.emoji}</div>
-                <div style={{ ...styles.goalLabel, color: meta.color }}>{meta.label}</div>
-                <div style={styles.goalWeeks}>{meta.weeks} weeks</div>
-                <div style={styles.goalDesc}>{meta.description}</div>
-                <div style={{ ...styles.goalArrow, background: meta.color }}>→</div>
+                <div style={{ ...styles.goalAccent, background: meta.color }} />
+                <div style={styles.goalBody}>
+                  <div style={styles.goalTop}>
+                    <span style={{ ...styles.goalLabel, color: meta.color }}>{meta.label}</span>
+                    <span style={styles.goalWeeks}>{meta.weeks} weeks</span>
+                  </div>
+                  <div style={styles.goalDesc}>{meta.description}</div>
+                  {next && (
+                    <div style={styles.goalNext}>
+                      Next: W{next.week}/D{next.day}
+                    </div>
+                  )}
+                </div>
+                <div style={styles.goalArrow}>›</div>
               </button>
             )
           })}
@@ -86,158 +95,166 @@ export default function Home() {
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  container: {
+  page: {
     minHeight: '100dvh',
-    background: 'linear-gradient(160deg, #0f0c29, #302b63, #24243e)',
+    background: '#0D0D0D',
+    color: '#fff',
+    fontFamily: "'DM Sans', sans-serif",
     display: 'flex',
     flexDirection: 'column',
-    alignItems: 'center',
     padding: '0 20px 40px',
-    fontFamily: "'DM Sans', sans-serif",
+    maxWidth: '480px',
+    margin: '0 auto',
   },
-  header: {
-    textAlign: 'center',
-    padding: '50px 0 20px',
+  logoWrap: {
+    paddingTop: '60px',
+    paddingBottom: '40px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '6px',
   },
-  logo: {
-    fontSize: '42px',
-    fontWeight: '700',
-    letterSpacing: '2px',
+  logoIcon: {
+    fontSize: '28px',
     color: '#fff',
+    lineHeight: 1,
   },
-  tagline: {
+  logoText: {
+    fontSize: '42px',
+    fontWeight: '800',
+    letterSpacing: '-1px',
+    lineHeight: 1,
+  },
+  logoSub: {
     fontSize: '14px',
-    color: 'rgba(255,255,255,0.5)',
-    marginTop: '6px',
-    letterSpacing: '1px',
+    color: 'rgba(255,255,255,0.35)',
+    marginTop: '4px',
   },
-  profileSection: {
-    width: '100%',
-    maxWidth: '420px',
+  section: {
     marginBottom: '32px',
   },
-  nameForm: {
-    background: 'rgba(255,255,255,0.06)',
-    borderRadius: '16px',
-    padding: '24px',
-    border: '1px solid rgba(255,255,255,0.1)',
+  sectionLabel: {
+    fontSize: '10px',
+    letterSpacing: '3px',
+    color: 'rgba(255,255,255,0.25)',
+    fontWeight: '600',
+    marginBottom: '12px',
+  },
+  nameCard: {
+    background: '#161616',
+    border: '1px solid #222',
+    borderRadius: '14px',
+    padding: '20px',
   },
   namePrompt: {
-    fontSize: '16px',
-    color: 'rgba(255,255,255,0.8)',
-    marginBottom: '14px',
-    textAlign: 'center',
+    fontSize: '15px',
+    color: 'rgba(255,255,255,0.6)',
+    marginBottom: '12px',
   },
-  nameInputRow: {
+  nameRow: {
     display: 'flex',
-    gap: '10px',
+    gap: '8px',
   },
   nameInput: {
     flex: 1,
-    padding: '12px 16px',
+    padding: '12px 14px',
+    background: '#0D0D0D',
+    border: '1px solid #2a2a2a',
     borderRadius: '10px',
-    border: '1px solid rgba(255,255,255,0.2)',
-    background: 'rgba(255,255,255,0.08)',
     color: '#fff',
-    fontSize: '16px',
+    fontSize: '15px',
     outline: 'none',
   },
   saveBtn: {
-    padding: '12px 20px',
+    width: '44px',
     borderRadius: '10px',
-    background: '#2ECC71',
-    color: '#fff',
-    fontSize: '15px',
-    fontWeight: '600',
-    whiteSpace: 'nowrap',
-  },
-  greeting: {
+    background: '#fff',
+    color: '#000',
+    fontSize: '20px',
+    fontWeight: '700',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: '12px',
-    padding: '16px',
-    background: 'rgba(255,255,255,0.06)',
+  },
+  greetingRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    background: '#161616',
+    border: '1px solid #222',
     borderRadius: '14px',
-    border: '1px solid rgba(255,255,255,0.1)',
+    padding: '18px 20px',
+  },
+  greetingName: {
+    fontSize: '20px',
+    fontWeight: '700',
   },
   greetingText: {
-    fontSize: '18px',
-    fontWeight: '600',
-    color: '#fff',
+    fontSize: '13px',
+    color: 'rgba(255,255,255,0.35)',
+    marginTop: '2px',
   },
   editBtn: {
-    fontSize: '13px',
-    color: 'rgba(255,255,255,0.4)',
+    fontSize: '12px',
+    color: 'rgba(255,255,255,0.3)',
     background: 'transparent',
-    padding: '4px 8px',
-    borderRadius: '6px',
-    border: '1px solid rgba(255,255,255,0.15)',
+    border: '1px solid #2a2a2a',
+    borderRadius: '8px',
+    padding: '6px 12px',
   },
-  goalsSection: {
-    width: '100%',
-    maxWidth: '420px',
-  },
-  goalsTitle: {
-    fontSize: '13px',
-    letterSpacing: '2px',
-    textTransform: 'uppercase',
-    color: 'rgba(255,255,255,0.4)',
-    marginBottom: '16px',
-    textAlign: 'center',
-  },
-  goalCards: {
+  goalList: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '14px',
+    gap: '10px',
   },
   goalCard: {
-    display: 'grid',
-    gridTemplateColumns: 'auto 1fr auto auto',
-    gridTemplateRows: 'auto auto',
+    display: 'flex',
     alignItems: 'center',
-    gap: '4px 14px',
-    padding: '18px 20px',
-    borderRadius: '16px',
-    background: 'rgba(255,255,255,0.05)',
-    border: '1.5px solid',
+    background: '#161616',
+    border: '1px solid #222',
+    borderRadius: '14px',
+    overflow: 'hidden',
     cursor: 'pointer',
     textAlign: 'left',
-    transition: 'background 0.2s, transform 0.15s',
+    transition: 'border-color 0.2s',
   },
-  goalEmoji: {
-    fontSize: '28px',
-    gridRow: '1 / 3',
+  goalAccent: {
+    width: '4px',
+    alignSelf: 'stretch',
+    flexShrink: 0,
+  },
+  goalBody: {
+    flex: 1,
+    padding: '16px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '4px',
+  },
+  goalTop: {
+    display: 'flex',
+    alignItems: 'baseline',
+    gap: '10px',
   },
   goalLabel: {
     fontSize: '22px',
-    fontWeight: '700',
-    lineHeight: 1,
+    fontWeight: '800',
+    letterSpacing: '-0.5px',
   },
   goalWeeks: {
     fontSize: '12px',
-    color: 'rgba(255,255,255,0.4)',
-    gridColumn: '4',
-    gridRow: '1',
-    textAlign: 'right',
+    color: 'rgba(255,255,255,0.3)',
   },
   goalDesc: {
     fontSize: '13px',
-    color: 'rgba(255,255,255,0.5)',
-    gridColumn: '2',
-    gridRow: '2',
+    color: 'rgba(255,255,255,0.45)',
+  },
+  goalNext: {
+    fontSize: '11px',
+    color: 'rgba(255,255,255,0.25)',
+    marginTop: '2px',
   },
   goalArrow: {
-    gridColumn: '4',
-    gridRow: '2',
-    width: '28px',
-    height: '28px',
-    borderRadius: '50%',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    fontSize: '14px',
-    color: '#fff',
-    fontWeight: '700',
+    fontSize: '24px',
+    color: 'rgba(255,255,255,0.2)',
+    paddingRight: '16px',
   },
 }
