@@ -52,7 +52,7 @@ export const program5k: ProgramWeek[] = [
   { week: 5, days: [
     { day: 1, segments: [warmup, run(5), walk(3), run(5), walk(3), run(5), cooldown] },
     { day: 2, segments: [warmup, run(8), walk(5), run(8), cooldown] },
-    { day: 3, segments: [warmup, run(20), cooldown] },
+    { day: 3, segments: [warmup, run(8), walk(5), run(8), cooldown] },
   ]},
   { week: 6, days: [
     { day: 1, segments: [warmup, run(5), walk(3), run(8), walk(3), run(5), cooldown] },
