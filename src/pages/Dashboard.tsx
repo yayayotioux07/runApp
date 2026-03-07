@@ -36,141 +36,149 @@ interface ParsedAppleWorkout {
   workoutType: string
 }
 
-function parseAppleHealthXML(xmlText: string): ParsedAppleWorkout[] {
-  const parser = new DOMParser()
-  const doc = parser.parseFromString(xmlText, 'application/xml')
+// ─── Streaming Apple Health XML Parser ──────────────────────────────
+// Reads the file in 1MB chunks, never loads the whole thing into memory.
+// Extracts only <Workout> blocks and nearby <Record type="HeartRate"> nodes.
 
-  // Check for parse errors
-  const parseError = doc.querySelector('parsererror')
-  if (parseError) throw new Error('XML parse error')
+function parseWorkoutBlock(block: string): ParsedAppleWorkout | null {
+  const attr = (name: string) => {
+    const m = block.match(new RegExp(`${name}="([^"]*)"`, 'i'))
+    return m ? m[1] : null
+  }
 
-  // ── Build heart rate lookup from standalone Record nodes ──────────
-  // Apple Health stores HR as individual <Record> nodes separate from workouts
-  // We need to match them to workouts by time window
-  interface HRPoint { time: number; value: number }
-  const hrRecords: HRPoint[] = []
-  doc.querySelectorAll('Record[type="HKQuantityTypeIdentifierHeartRate"]').forEach(r => {
-    const startDate = r.getAttribute('startDate')
-    const val = parseFloat(r.getAttribute('value') ?? '0')
-    if (startDate && val > 0) {
-      hrRecords.push({ time: new Date(startDate).getTime(), value: val })
+  const type = attr('workoutActivityType') ?? ''
+  const isRunning = type.includes('Running')
+  const isWalking = type.includes('Walking')
+  if (!isRunning && !isWalking) return null
+
+  const startRaw  = attr('startDate')
+  const endRaw    = attr('endDate')
+  const durRaw    = parseFloat(attr('duration') ?? '0')
+  const durUnit   = (attr('durationUnit') ?? 'min').toLowerCase()
+  const totalMins = durUnit.startsWith('s') ? durRaw / 60
+    : durUnit.startsWith('h') ? durRaw * 60
+    : durRaw
+
+  if (totalMins < 4) return null
+
+  // Distance
+  let distanceKm: number | undefined
+  const distMatch = block.match(
+    /WorkoutStatistics[^>]*type="HKQuantityTypeIdentifier(?:DistanceWalkingRunning|DistanceRunning)"[^>]*/i
+  )
+  if (distMatch) {
+    const sumM = distMatch[0].match(/sum="([^"]+)"/)
+    const unitM = distMatch[0].match(/unit="([^"]+)"/)
+    if (sumM) {
+      const val = parseFloat(sumM[1])
+      const unit = (unitM?.[1] ?? 'km').toLowerCase()
+      distanceKm = unit.includes('mi') ? val * 1.60934 : val
+      if (distanceKm) distanceKm = Math.round(distanceKm * 100) / 100
     }
-  })
+  }
 
-  // ── Parse Workout nodes ───────────────────────────────────────────
-  const workoutNodes = doc.querySelectorAll('Workout')
+  // Calories
+  let calories: number | undefined
+  const calMatch = block.match(
+    /WorkoutStatistics[^>]*type="HKQuantityTypeIdentifierActiveEnergyBurned"[^>]*/i
+  )
+  if (calMatch) {
+    const sumM = calMatch[0].match(/sum="([^"]+)"/)
+    if (sumM) calories = Math.round(parseFloat(sumM[1]))
+  }
+
+  // Heart rate from WorkoutStatistics
+  let heartRateAvg: number | undefined
+  let heartRateMax: number | undefined
+  const hrMatch = block.match(
+    /WorkoutStatistics[^>]*type="HKQuantityTypeIdentifierHeartRate"[^>]*/i
+  )
+  if (hrMatch) {
+    const avgM = hrMatch[0].match(/average="([^"]+)"/)
+    const maxM = hrMatch[0].match(/maximum="([^"]+)"/)
+    if (avgM && parseFloat(avgM[1]) > 0) heartRateAvg = Math.round(parseFloat(avgM[1]))
+    if (maxM && parseFloat(maxM[1]) > 0) heartRateMax = Math.round(parseFloat(maxM[1]))
+  }
+
+  // Pace
+  let pace: string | undefined
+  if (distanceKm && distanceKm > 0.1) {
+    const secsPerKm = (totalMins * 60) / distanceKm
+    const pMin = Math.floor(secsPerKm / 60)
+    const pSec = Math.round(secsPerKm % 60)
+    if (pMin < 30) pace = `${pMin}:${String(pSec).padStart(2, '0')}/km`
+  }
+
+  return {
+    date: startRaw ? new Date(startRaw).toISOString() : new Date().toISOString(),
+    totalMinutes: Math.round(totalMins),
+    totalSeconds: Math.round(totalMins * 60),
+    distanceKm,
+    calories,
+    heartRateAvg,
+    heartRateMax,
+    pace,
+    workoutType: isRunning ? 'Running' : 'Walking',
+  }
+}
+
+// Stream file in 2MB chunks, stitch across boundaries, extract Workout blocks
+async function streamParseAppleHealthXML(
+  file: File,
+  onProgress: (pct: number) => void
+): Promise<ParsedAppleWorkout[]> {
+  const CHUNK = 2 * 1024 * 1024 // 2MB
   const results: ParsedAppleWorkout[] = []
+  let buffer = ''
+  let offset = 0
 
-  workoutNodes.forEach(node => {
-    const type = node.getAttribute('workoutActivityType') ?? ''
+  while (offset < file.size) {
+    const blob = file.slice(offset, offset + CHUNK)
+    const text = await blob.text()
+    buffer += text
+    offset += CHUNK
+    onProgress(Math.min(Math.round((offset / file.size) * 100), 99))
 
-    // Accept Running OR Walking (walking runs are valid training)
-    const isRunning = type.includes('Running')
-    const isWalking = type.includes('Walking')
-    if (!isRunning && !isWalking) return
-
-    const startRaw = node.getAttribute('startDate') ?? ''
-    const endRaw   = node.getAttribute('endDate') ?? ''
-    const durationMins = parseFloat(node.getAttribute('duration') ?? '0')
-    const durationUnit = (node.getAttribute('durationUnit') ?? 'min').toLowerCase()
-
-    // Normalize duration to minutes
-    const totalMins = durationUnit.startsWith('s') ? durationMins / 60
-      : durationUnit.startsWith('h') ? durationMins * 60
-      : durationMins
-
-    if (totalMins < 4) return // skip warmup fragments / accidental entries
-
-    const startMs = startRaw ? new Date(startRaw).getTime() : 0
-    const endMs   = endRaw   ? new Date(endRaw).getTime()   : startMs + totalMins * 60000
-
-    // ── Distance ──────────────────────────────────────────────────
-    let distanceKm: number | undefined
-
-    // Try WorkoutStatistics first (newer exports)
-    const distStat = node.querySelector(
-      'WorkoutStatistics[type="HKQuantityTypeIdentifierDistanceWalkingRunning"],' +
-      'WorkoutStatistics[type="HKQuantityTypeIdentifierDistanceRunning"]'
-    )
-    if (distStat) {
-      const val  = parseFloat(distStat.getAttribute('sum') ?? distStat.getAttribute('average') ?? '0')
-      const unit = (distStat.getAttribute('unit') ?? 'km').toLowerCase()
-      if (val > 0) distanceKm = unit.includes('mi') ? val * 1.60934 : val
-    }
-
-    // Fallback: sum WorkoutEvent / inner Record distance nodes
-    if (!distanceKm) {
-      let sumDist = 0
-      node.querySelectorAll(
-        'WorkoutStatistics[type="HKQuantityTypeIdentifierDistanceWalkingRunning"]'
-      ).forEach(n => {
-        const v = parseFloat(n.getAttribute('sum') ?? '0')
-        const u = (n.getAttribute('unit') ?? 'km').toLowerCase()
-        sumDist += u.includes('mi') ? v * 1.60934 : v
-      })
-      if (sumDist > 0) distanceKm = sumDist
-    }
-
-    if (distanceKm) distanceKm = Math.round(distanceKm * 100) / 100
-
-    // ── Calories ──────────────────────────────────────────────────
-    let calories: number | undefined
-    const calStat = node.querySelector(
-      'WorkoutStatistics[type="HKQuantityTypeIdentifierActiveEnergyBurned"],' +
-      'WorkoutStatistics[type="HKQuantityTypeIdentifierBasalEnergyBurned"]'
-    )
-    if (calStat) {
-      const val = parseFloat(calStat.getAttribute('sum') ?? calStat.getAttribute('average') ?? '0')
-      if (val > 0) calories = Math.round(val)
-    }
-
-    // ── Heart Rate from WorkoutStatistics ─────────────────────────
-    let heartRateAvg: number | undefined
-    let heartRateMax: number | undefined
-
-    const hrStat = node.querySelector('WorkoutStatistics[type="HKQuantityTypeIdentifierHeartRate"]')
-    if (hrStat) {
-      const avg = hrStat.getAttribute('average')
-      const max = hrStat.getAttribute('maximum')
-      if (avg && parseFloat(avg) > 0) heartRateAvg = Math.round(parseFloat(avg))
-      if (max && parseFloat(max) > 0) heartRateMax = Math.round(parseFloat(max))
-    }
-
-    // ── HR fallback: match from standalone HR records by time window ─
-    if (!heartRateAvg && hrRecords.length > 0) {
-      const windowHR = hrRecords.filter(r => r.time >= startMs && r.time <= endMs)
-      if (windowHR.length > 0) {
-        const sum = windowHR.reduce((a, r) => a + r.value, 0)
-        heartRateAvg = Math.round(sum / windowHR.length)
-        heartRateMax = Math.round(Math.max(...windowHR.map(r => r.value)))
+    // Extract complete <Workout ...> blocks (self-closing or with children)
+    // We look for <Workout until </Workout> or />
+    let searchFrom = 0
+    while (true) {
+      const start = buffer.indexOf('<Workout ', searchFrom)
+      if (start === -1) {
+        // Keep last 4KB in case a workout block straddles chunks
+        buffer = buffer.slice(Math.max(0, buffer.length - 4096))
+        break
       }
-    }
 
-    // ── Pace ──────────────────────────────────────────────────────
-    let pace: string | undefined
-    if (distanceKm && distanceKm > 0.1) {
-      const secsPerKm = (totalMins * 60) / distanceKm
-      const paceMin = Math.floor(secsPerKm / 60)
-      const paceSec = Math.round(secsPerKm % 60)
-      if (paceMin < 30) { // sanity check — ignore implausible paces
-        pace = `${paceMin}:${String(paceSec).padStart(2, '0')}/km`
+      // Find end of this workout block
+      const selfClose = buffer.indexOf('/>', start)
+      const closeTag  = buffer.indexOf('</Workout>', start)
+
+      let blockEnd: number
+      let blockText: string
+
+      if (selfClose !== -1 && (closeTag === -1 || selfClose < closeTag)) {
+        blockEnd  = selfClose + 2
+        blockText = buffer.slice(start, blockEnd)
+      } else if (closeTag !== -1) {
+        blockEnd  = closeTag + 10
+        blockText = buffer.slice(start, blockEnd)
+      } else {
+        // Block not complete yet — keep from start and wait for next chunk
+        buffer = buffer.slice(start)
+        break
       }
+
+      const workout = parseWorkoutBlock(blockText)
+      if (workout) results.push(workout)
+      searchFrom = blockEnd
     }
 
-    results.push({
-      date: startRaw ? new Date(startRaw).toISOString() : new Date().toISOString(),
-      totalMinutes: Math.round(totalMins),
-      totalSeconds: Math.round(totalMins * 60),
-      distanceKm,
-      calories,
-      heartRateAvg,
-      heartRateMax,
-      pace,
-      workoutType: isRunning ? 'Running' : 'Walking',
-    })
-  })
+    // Yield to UI thread so progress bar can update
+    await new Promise(r => setTimeout(r, 0))
+  }
 
-  // Sort newest first
+  onProgress(100)
   return results.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
 }
 
@@ -185,50 +193,38 @@ function AppleImportPanel({ onAdd, onClose }: { onAdd: (r: Omit<WorkoutRecord, '
   const [xmlGoal, setXmlGoal] = useState<GoalKey>('10k')
   const [errorMsg, setErrorMsg] = useState('')
   const [dragOver, setDragOver] = useState(false)
+  const [parseProgress, setParseProgress] = useState(0)
 
-  // Manual tab state
-  const [form, setForm] = useState({
-    goal: '10k' as GoalKey, week: '1', day: '1',
-    date: new Date().toISOString().slice(0, 10),
-    distanceKm: '', heartRateAvg: '', heartRateMax: '',
-    calories: '', pace: '', totalMinutes: '',
-    runMinutes: '', walkMinutes: '',
-  })
-  const setField = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
-    setForm(f => ({ ...f, [k]: e.target.value }))
-
-  const handleFile = (file: File) => {
-    setXmlState('parsing')
-    setErrorMsg('')
-
-    const readXml = (text: string) => {
-      try {
-        const results = parseAppleHealthXML(text)
-        if (results.length === 0) {
-          setXmlState('error')
-          setErrorMsg('No running or walking workouts found. Make sure you selected export.xml (inside the apple_health_export folder after unzipping) — not a different file.')
-          return
-        }
-        setParsedWorkouts(results)
-        setSelectedIds(new Set(results.map((_, i) => i)))
-        setXmlState('done')
-      } catch {
-        setXmlState('error')
-        setErrorMsg('Could not parse the file. Please make sure it\'s the export.xml from Apple Health.')
-      }
-    }
-
+  const handleFile = async (file: File) => {
     if (file.name.endsWith('.zip')) {
       setXmlState('error')
-      setErrorMsg('Please unzip the file first and select the export.xml file inside the apple_health_export folder.')
+      setErrorMsg('Please unzip the file first and select export.xml inside the apple_health_export folder.')
       return
     }
-
-    const reader = new FileReader()
-    reader.onload = e => readXml(e.target?.result as string)
-    reader.onerror = () => { setXmlState('error'); setErrorMsg('Failed to read file.') }
-    reader.readAsText(file)
+    if (!file.name.endsWith('.xml')) {
+      setXmlState('error')
+      setErrorMsg('Please select the export.xml file from Apple Health.')
+      return
+    }
+    setXmlState('parsing')
+    setParseProgress(0)
+    setErrorMsg('')
+    try {
+      const results = await streamParseAppleHealthXML(file, setParseProgress)
+      if (results.length === 0) {
+        setXmlState('error')
+        setErrorMsg('No running or walking workouts found. Make sure you selected export.xml (inside the apple_health_export folder after unzipping).')
+        return
+      }
+      setParsedWorkouts(results)
+      setSelectedIds(new Set(results.map((_, i) => i)))
+      setXmlState('done')
+    } catch {
+      setXmlState('error')
+      setErrorMsg('Could not parse the file. Please make sure it\'s the export.xml from Apple Health.')
+    }
   }
+
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault(); setDragOver(false)
@@ -372,9 +368,22 @@ function AppleImportPanel({ onAdd, onClose }: { onAdd: (r: Omit<WorkoutRecord, '
                 )}
               </div>
             ) : xmlState === 'parsing' ? (
-              <div style={{ textAlign: 'center', padding: '40px 0', color: '#555' }}>
-                <div style={{ fontSize: 32, marginBottom: 12 }}>⏳</div>
-                Parsing your health data...
+              <div style={{ textAlign: 'center', padding: '40px 20px' }}>
+                <div style={{ fontSize: 32, marginBottom: 16 }}>⚙️</div>
+                <div style={{ color: '#ccc', fontWeight: 700, marginBottom: 6 }}>Scanning your health data...</div>
+                <div style={{ color: '#555', fontSize: 12, marginBottom: 20 }}>
+                  Reading file in chunks — large exports may take 10–30 seconds
+                </div>
+                <div style={{ height: 6, background: '#1a1a1a', borderRadius: 3, overflow: 'hidden', margin: '0 auto', maxWidth: 320 }}>
+                  <div style={{
+                    height: '100%',
+                    width: `${parseProgress}%`,
+                    background: 'linear-gradient(90deg, #FF6B6B, #FF9A9A)',
+                    borderRadius: 3,
+                    transition: 'width 0.3s ease',
+                  }} />
+                </div>
+                <div style={{ color: '#444', fontSize: 11, marginTop: 8 }}>{parseProgress}%</div>
               </div>
             ) : (
               // Results
