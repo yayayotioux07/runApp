@@ -47,9 +47,9 @@ function parseWorkoutBlock(block: string): ParsedAppleWorkout | null {
   }
 
   const type = attr('workoutActivityType') ?? ''
-  const isRunning = type.includes('Running')
-  const isWalking = type.includes('Walking')
-  if (!isRunning && !isWalking) return null
+  // Only outdoor running (HKWorkoutActivityTypeRunning) — excludes Walking, IndoorRun, TrackRun
+  const isOutdoorRun = type === 'HKWorkoutActivityTypeRunning'
+  if (!isOutdoorRun) return null
 
   const startRaw  = attr('startDate')
   const endRaw    = attr('endDate')
@@ -118,7 +118,7 @@ function parseWorkoutBlock(block: string): ParsedAppleWorkout | null {
     heartRateAvg,
     heartRateMax,
     pace,
-    workoutType: isRunning ? 'Running' : 'Walking',
+    workoutType: 'Running',
   }
 }
 
@@ -771,7 +771,7 @@ export default function Dashboard() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginTop: 16 }}>
                 {(['5k', '10k', '21k'] as GoalKey[]).map(goal => {
                   const meta = goalMeta[goal]
-                  const done = workouts.filter(w => w.goal === goal).length
+                  const done = Math.min(workouts.filter(w => w.goal === goal && w.week <= meta.weeks && w.day >= 1 && w.day <= 3).length, total)
                   const total = meta.weeks * 3
                   const pct = Math.min((done / total) * 100, 100)
                   return (
