@@ -46,8 +46,18 @@ export default function ActiveWorkout() {
   const dayData = weekData?.days.find(d => d.day === dayNum)
 
   const handleComplete = useCallback(() => {
-    markComplete(key, weekNum, dayNum)
-  }, [key, weekNum, dayNum, markComplete])
+    const segs = dayData?.segments ?? []
+    const totalMins = Math.round(segs.reduce((a, s) => a + s.duration, 0) / 60)
+    const runMins = Math.round(segs.filter(s => s.type === 'run').reduce((a, s) => a + s.duration, 0) / 60)
+    const walkMins = Math.round(segs.filter(s => s.type === 'walk').reduce((a, s) => a + s.duration, 0) / 60)
+    markComplete(key, weekNum, dayNum, {
+      totalSeconds: elapsedTotal,
+      totalMinutes: totalMins,
+      runMinutes: runMins,
+      walkMinutes: walkMins,
+      segments: segs.length,
+    })
+  }, [key, weekNum, dayNum, markComplete, dayData, elapsedTotal])
 
   const {
     currentSegment,

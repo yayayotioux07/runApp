@@ -53,7 +53,10 @@ export default function Home() {
               <div style={styles.greetingName}>Hey, {profileName}</div>
               <div style={styles.greetingText}>Choose a goal to continue</div>
             </div>
-            <button style={styles.editBtn} onClick={() => setSaved(false)}>Edit</button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button style={styles.dashBtn} onClick={() => navigate('/dashboard')}>📊 Dashboard</button>
+              <button style={styles.editBtn} onClick={() => setSaved(false)}>Edit</button>
+            </div>
           </div>
         )}
       </div>
@@ -200,6 +203,19 @@ const styles: Record<string, React.CSSProperties> = {
     border: '1px solid #2a2a2a',
     borderRadius: '8px',
     padding: '6px 12px',
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+  },
+  dashBtn: {
+    fontSize: '12px',
+    color: '#2ECC71',
+    background: '#2ECC7115',
+    border: '1px solid #2ECC7133',
+    borderRadius: '8px',
+    padding: '6px 12px',
+    cursor: 'pointer',
+    fontWeight: 700,
+    fontFamily: 'inherit',
   },
   goalList: {
     display: 'flex',
