@@ -23,19 +23,260 @@ const goalColors: Record<GoalKey, string> = {
 const sourceColors = { app: '#2ECC71', apple: '#FF6B6B' }
 
 // ─── Apple Import Form ───────────────────────────────────────────────
+// ─── Apple XML Parser ────────────────────────────────────────────────
+interface ParsedAppleWorkout {
+  date: string
+  totalMinutes: number
+  totalSeconds: number
+  distanceKm?: number
+  calories?: number
+  heartRateAvg?: number
+  heartRateMax?: number
+  pace?: string
+  workoutType: string
+}
+
+function parseAppleHealthXML(xmlText: string): ParsedAppleWorkout[] {
+  const parser = new DOMParser()
+  const doc = parser.parseFromString(xmlText, 'application/xml')
+
+  // Check for parse errors
+  const parseError = doc.querySelector('parsererror')
+  if (parseError) throw new Error('XML parse error')
+
+  // ── Build heart rate lookup from standalone Record nodes ──────────
+  // Apple Health stores HR as individual <Record> nodes separate from workouts
+  // We need to match them to workouts by time window
+  interface HRPoint { time: number; value: number }
+  const hrRecords: HRPoint[] = []
+  doc.querySelectorAll('Record[type="HKQuantityTypeIdentifierHeartRate"]').forEach(r => {
+    const startDate = r.getAttribute('startDate')
+    const val = parseFloat(r.getAttribute('value') ?? '0')
+    if (startDate && val > 0) {
+      hrRecords.push({ time: new Date(startDate).getTime(), value: val })
+    }
+  })
+
+  // ── Parse Workout nodes ───────────────────────────────────────────
+  const workoutNodes = doc.querySelectorAll('Workout')
+  const results: ParsedAppleWorkout[] = []
+
+  workoutNodes.forEach(node => {
+    const type = node.getAttribute('workoutActivityType') ?? ''
+
+    // Accept Running OR Walking (walking runs are valid training)
+    const isRunning = type.includes('Running')
+    const isWalking = type.includes('Walking')
+    if (!isRunning && !isWalking) return
+
+    const startRaw = node.getAttribute('startDate') ?? ''
+    const endRaw   = node.getAttribute('endDate') ?? ''
+    const durationMins = parseFloat(node.getAttribute('duration') ?? '0')
+    const durationUnit = (node.getAttribute('durationUnit') ?? 'min').toLowerCase()
+
+    // Normalize duration to minutes
+    const totalMins = durationUnit.startsWith('s') ? durationMins / 60
+      : durationUnit.startsWith('h') ? durationMins * 60
+      : durationMins
+
+    if (totalMins < 4) return // skip warmup fragments / accidental entries
+
+    const startMs = startRaw ? new Date(startRaw).getTime() : 0
+    const endMs   = endRaw   ? new Date(endRaw).getTime()   : startMs + totalMins * 60000
+
+    // ── Distance ──────────────────────────────────────────────────
+    let distanceKm: number | undefined
+
+    // Try WorkoutStatistics first (newer exports)
+    const distStat = node.querySelector(
+      'WorkoutStatistics[type="HKQuantityTypeIdentifierDistanceWalkingRunning"],' +
+      'WorkoutStatistics[type="HKQuantityTypeIdentifierDistanceRunning"]'
+    )
+    if (distStat) {
+      const val  = parseFloat(distStat.getAttribute('sum') ?? distStat.getAttribute('average') ?? '0')
+      const unit = (distStat.getAttribute('unit') ?? 'km').toLowerCase()
+      if (val > 0) distanceKm = unit.includes('mi') ? val * 1.60934 : val
+    }
+
+    // Fallback: sum WorkoutEvent / inner Record distance nodes
+    if (!distanceKm) {
+      let sumDist = 0
+      node.querySelectorAll(
+        'WorkoutStatistics[type="HKQuantityTypeIdentifierDistanceWalkingRunning"]'
+      ).forEach(n => {
+        const v = parseFloat(n.getAttribute('sum') ?? '0')
+        const u = (n.getAttribute('unit') ?? 'km').toLowerCase()
+        sumDist += u.includes('mi') ? v * 1.60934 : v
+      })
+      if (sumDist > 0) distanceKm = sumDist
+    }
+
+    if (distanceKm) distanceKm = Math.round(distanceKm * 100) / 100
+
+    // ── Calories ──────────────────────────────────────────────────
+    let calories: number | undefined
+    const calStat = node.querySelector(
+      'WorkoutStatistics[type="HKQuantityTypeIdentifierActiveEnergyBurned"],' +
+      'WorkoutStatistics[type="HKQuantityTypeIdentifierBasalEnergyBurned"]'
+    )
+    if (calStat) {
+      const val = parseFloat(calStat.getAttribute('sum') ?? calStat.getAttribute('average') ?? '0')
+      if (val > 0) calories = Math.round(val)
+    }
+
+    // ── Heart Rate from WorkoutStatistics ─────────────────────────
+    let heartRateAvg: number | undefined
+    let heartRateMax: number | undefined
+
+    const hrStat = node.querySelector('WorkoutStatistics[type="HKQuantityTypeIdentifierHeartRate"]')
+    if (hrStat) {
+      const avg = hrStat.getAttribute('average')
+      const max = hrStat.getAttribute('maximum')
+      if (avg && parseFloat(avg) > 0) heartRateAvg = Math.round(parseFloat(avg))
+      if (max && parseFloat(max) > 0) heartRateMax = Math.round(parseFloat(max))
+    }
+
+    // ── HR fallback: match from standalone HR records by time window ─
+    if (!heartRateAvg && hrRecords.length > 0) {
+      const windowHR = hrRecords.filter(r => r.time >= startMs && r.time <= endMs)
+      if (windowHR.length > 0) {
+        const sum = windowHR.reduce((a, r) => a + r.value, 0)
+        heartRateAvg = Math.round(sum / windowHR.length)
+        heartRateMax = Math.round(Math.max(...windowHR.map(r => r.value)))
+      }
+    }
+
+    // ── Pace ──────────────────────────────────────────────────────
+    let pace: string | undefined
+    if (distanceKm && distanceKm > 0.1) {
+      const secsPerKm = (totalMins * 60) / distanceKm
+      const paceMin = Math.floor(secsPerKm / 60)
+      const paceSec = Math.round(secsPerKm % 60)
+      if (paceMin < 30) { // sanity check — ignore implausible paces
+        pace = `${paceMin}:${String(paceSec).padStart(2, '0')}/km`
+      }
+    }
+
+    results.push({
+      date: startRaw ? new Date(startRaw).toISOString() : new Date().toISOString(),
+      totalMinutes: Math.round(totalMins),
+      totalSeconds: Math.round(totalMins * 60),
+      distanceKm,
+      calories,
+      heartRateAvg,
+      heartRateMax,
+      pace,
+      workoutType: isRunning ? 'Running' : 'Walking',
+    })
+  })
+
+  // Sort newest first
+  return results.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+}
+
+// ─── Import Panel ────────────────────────────────────────────────────
 function AppleImportPanel({ onAdd, onClose }: { onAdd: (r: Omit<WorkoutRecord, 'id' | 'source'>) => void; onClose: () => void }) {
+  const [tab, setTab] = useState<'xml' | 'manual'>('xml')
+
+  // XML tab state
+  const [xmlState, setXmlState] = useState<'idle' | 'parsing' | 'done' | 'error'>('idle')
+  const [parsedWorkouts, setParsedWorkouts] = useState<ParsedAppleWorkout[]>([])
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
+  const [xmlGoal, setXmlGoal] = useState<GoalKey>('10k')
+  const [errorMsg, setErrorMsg] = useState('')
+  const [dragOver, setDragOver] = useState(false)
+
+  // Manual tab state
   const [form, setForm] = useState({
-    goal: '10k' as GoalKey, week: '', day: '',
+    goal: '10k' as GoalKey, week: '1', day: '1',
     date: new Date().toISOString().slice(0, 10),
     distanceKm: '', heartRateAvg: '', heartRateMax: '',
     calories: '', pace: '', totalMinutes: '',
     runMinutes: '', walkMinutes: '',
   })
-  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+  const setField = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm(f => ({ ...f, [k]: e.target.value }))
 
-  const submit = () => {
-    if (!form.week || !form.day || !form.totalMinutes) return
+  const handleFile = (file: File) => {
+    setXmlState('parsing')
+    setErrorMsg('')
+
+    const readXml = (text: string) => {
+      try {
+        const results = parseAppleHealthXML(text)
+        if (results.length === 0) {
+          setXmlState('error')
+          setErrorMsg('No running or walking workouts found. Make sure you selected export.xml (inside the apple_health_export folder after unzipping) — not a different file.')
+          return
+        }
+        setParsedWorkouts(results)
+        setSelectedIds(new Set(results.map((_, i) => i)))
+        setXmlState('done')
+      } catch {
+        setXmlState('error')
+        setErrorMsg('Could not parse the file. Please make sure it\'s the export.xml from Apple Health.')
+      }
+    }
+
+    if (file.name.endsWith('.zip')) {
+      setXmlState('error')
+      setErrorMsg('Please unzip the file first and select the export.xml file inside the apple_health_export folder.')
+      return
+    }
+
+    const reader = new FileReader()
+    reader.onload = e => readXml(e.target?.result as string)
+    reader.onerror = () => { setXmlState('error'); setErrorMsg('Failed to read file.') }
+    reader.readAsText(file)
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault(); setDragOver(false)
+    const file = e.dataTransfer.files[0]
+    if (file) handleFile(file)
+  }
+
+  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) handleFile(file)
+  }
+
+  const toggleSelect = (i: number) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      next.has(i) ? next.delete(i) : next.add(i)
+      return next
+    })
+  }
+
+  const importSelected = () => {
+    let weekCounter = 1; let dayCounter = 1
+    parsedWorkouts.forEach((w, i) => {
+      if (!selectedIds.has(i)) return
+      onAdd({
+        goal: xmlGoal,
+        week: weekCounter,
+        day: dayCounter,
+        date: w.date,
+        totalSeconds: w.totalSeconds,
+        totalMinutes: w.totalMinutes,
+        runMinutes: w.workoutType === 'Running' ? w.totalMinutes : 0,
+        walkMinutes: w.workoutType === 'Walking' ? w.totalMinutes : 0,
+        segments: 3,
+        distanceKm: w.distanceKm,
+        heartRateAvg: w.heartRateAvg,
+        heartRateMax: w.heartRateMax,
+        calories: w.calories,
+        pace: w.pace,
+      })
+      dayCounter++
+      if (dayCounter > 3) { dayCounter = 1; weekCounter++ }
+    })
+    onClose()
+  }
+
+  const submitManual = () => {
+    if (!form.totalMinutes) return
     onAdd({
       goal: form.goal,
       week: parseInt(form.week),
@@ -57,65 +298,222 @@ function AppleImportPanel({ onAdd, onClose }: { onAdd: (r: Omit<WorkoutRecord, '
 
   return (
     <div style={styles.overlay}>
-      <div style={styles.panel}>
+      <div style={{ ...styles.panel, maxWidth: 620 }}>
+        {/* Header */}
         <div style={styles.panelHeader}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ fontSize: 20 }}>🍎</span>
-            <span style={{ fontWeight: 700, fontSize: 16, color: '#fff' }}>Import Apple Activity</span>
+            <span style={{ fontSize: 22 }}>🍎</span>
+            <span style={{ fontWeight: 800, fontSize: 17, color: '#fff' }}>Apple Health Import</span>
           </div>
           <button onClick={onClose} style={styles.closeBtn}>✕</button>
         </div>
-        <p style={{ color: '#888', fontSize: 13, marginBottom: 20 }}>
-          Manually enter your Apple Health workout data to track it alongside your RunUp progress.
-        </p>
-        <div style={styles.formGrid}>
-          <label style={styles.label}>Program
-            <select value={form.goal} onChange={set('goal')} style={styles.input}>
-              <option value="5k">5K</option>
-              <option value="10k">10K</option>
-              <option value="21k">Half Marathon</option>
-            </select>
-          </label>
-          <label style={styles.label}>Date
-            <input type="date" value={form.date} onChange={set('date')} style={styles.input} />
-          </label>
-          <label style={styles.label}>Week #
-            <input type="number" placeholder="e.g. 6" value={form.week} onChange={set('week')} style={styles.input} min="1" max="20" />
-          </label>
-          <label style={styles.label}>Day #
-            <input type="number" placeholder="1–3" value={form.day} onChange={set('day')} style={styles.input} min="1" max="3" />
-          </label>
-          <label style={styles.label}>Total Duration (min) *
-            <input type="number" placeholder="e.g. 35" value={form.totalMinutes} onChange={set('totalMinutes')} style={styles.input} />
-          </label>
-          <label style={styles.label}>Run Time (min)
-            <input type="number" placeholder="e.g. 25" value={form.runMinutes} onChange={set('runMinutes')} style={styles.input} />
-          </label>
-          <label style={styles.label}>Distance (km)
-            <input type="number" placeholder="e.g. 4.2" value={form.distanceKm} onChange={set('distanceKm')} style={styles.input} step="0.1" />
-          </label>
-          <label style={styles.label}>Avg Heart Rate (bpm)
-            <input type="number" placeholder="e.g. 148" value={form.heartRateAvg} onChange={set('heartRateAvg')} style={styles.input} />
-          </label>
-          <label style={styles.label}>Max Heart Rate (bpm)
-            <input type="number" placeholder="e.g. 172" value={form.heartRateMax} onChange={set('heartRateMax')} style={styles.input} />
-          </label>
-          <label style={styles.label}>Calories
-            <input type="number" placeholder="e.g. 320" value={form.calories} onChange={set('calories')} style={styles.input} />
-          </label>
-          <label style={styles.label}>Avg Pace (min/km)
-            <input type="text" placeholder="e.g. 5:30" value={form.pace} onChange={set('pace')} style={styles.input} />
-          </label>
-          <label style={styles.label}>Walk Time (min)
-            <input type="number" placeholder="e.g. 5" value={form.walkMinutes} onChange={set('walkMinutes')} style={styles.input} />
-          </label>
+
+        {/* Tabs */}
+        <div style={{ display: 'flex', gap: 0, marginBottom: 20, borderBottom: '1px solid #222' }}>
+          {([['xml', '📁 Export File'], ['manual', '✏️ Manual Entry']] as const).map(([t, label]) => (
+            <button key={t} onClick={() => setTab(t)} style={{
+              background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+              fontSize: 13, fontWeight: 700, padding: '8px 18px',
+              color: tab === t ? '#fff' : '#555',
+              borderBottom: tab === t ? '2px solid #FF6B6B' : '2px solid transparent',
+              marginBottom: -1,
+            }}>{label}</button>
+          ))}
         </div>
-        <div style={{ display: 'flex', gap: 10, marginTop: 24 }}>
-          <button onClick={onClose} style={{ ...styles.btn, background: '#222', flex: 1 }}>Cancel</button>
-          <button onClick={submit} style={{ ...styles.btn, background: '#FF6B6B', flex: 2 }}>
-            🍎 Add Workout
-          </button>
-        </div>
+
+        {/* ── XML Tab ── */}
+        {tab === 'xml' && (
+          <div>
+            {/* Instructions */}
+            <div style={{ background: '#0D0D0D', border: '1px solid #1f1f1f', borderRadius: 12, padding: 16, marginBottom: 20 }}>
+              <p style={{ color: '#888', fontSize: 13, margin: '0 0 10px', fontWeight: 700 }}>How to export from Apple Health:</p>
+              <ol style={{ color: '#666', fontSize: 12, lineHeight: 1.8, margin: 0, paddingLeft: 18 }}>
+                <li>Open the <strong style={{ color: '#ccc' }}>Health</strong> app on your iPhone</li>
+                <li>Tap your <strong style={{ color: '#ccc' }}>profile photo</strong> (top right)</li>
+                <li>Scroll down → tap <strong style={{ color: '#ccc' }}>"Export All Health Data"</strong></li>
+                <li>Share the ZIP to your computer, then <strong style={{ color: '#ccc' }}>unzip it</strong></li>
+                <li>Upload the <strong style={{ color: '#FF6B6B' }}>export.xml</strong> file below</li>
+              </ol>
+            </div>
+
+            {/* Drop zone */}
+            {xmlState === 'idle' || xmlState === 'error' ? (
+              <div
+                onDrop={handleDrop}
+                onDragOver={e => { e.preventDefault(); setDragOver(true) }}
+                onDragLeave={() => setDragOver(false)}
+                style={{
+                  border: `2px dashed ${dragOver ? '#FF6B6B' : '#2a2a2a'}`,
+                  borderRadius: 14, padding: '32px 20px', textAlign: 'center',
+                  background: dragOver ? '#FF6B6B08' : '#0D0D0D',
+                  transition: 'all 0.2s', cursor: 'pointer',
+                }}
+                onClick={() => document.getElementById('xml-file-input')?.click()}
+              >
+                <div style={{ fontSize: 36, marginBottom: 10 }}>📄</div>
+                <div style={{ color: '#fff', fontWeight: 700, fontSize: 15, marginBottom: 6 }}>
+                  Drop export.xml here
+                </div>
+                <div style={{ color: '#555', fontSize: 12, marginBottom: 16 }}>
+                  or click to browse files
+                </div>
+                <input
+                  id="xml-file-input"
+                  type="file"
+                  accept=".xml"
+                  style={{ display: 'none' }}
+                  onChange={handleFileInput}
+                />
+                <div style={{ ...styles.btn, display: 'inline-block', background: '#FF6B6B', fontSize: 13, padding: '8px 20px' }}>
+                  Choose File
+                </div>
+                {xmlState === 'error' && (
+                  <div style={{ color: '#FF6B6B', fontSize: 12, marginTop: 14, lineHeight: 1.5 }}>{errorMsg}</div>
+                )}
+              </div>
+            ) : xmlState === 'parsing' ? (
+              <div style={{ textAlign: 'center', padding: '40px 0', color: '#555' }}>
+                <div style={{ fontSize: 32, marginBottom: 12 }}>⏳</div>
+                Parsing your health data...
+              </div>
+            ) : (
+              // Results
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                  <span style={{ color: '#ccc', fontSize: 13 }}>
+                    Found <strong style={{ color: '#FF6B6B' }}>{parsedWorkouts.length}</strong> running/walking workouts
+                  </span>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <span style={{ fontSize: 11, color: '#555' }}>Assign to:</span>
+                    <select value={xmlGoal} onChange={e => setXmlGoal(e.target.value as GoalKey)}
+                      style={{ ...styles.input, padding: '4px 8px', fontSize: 12, width: 'auto' }}>
+                      <option value="5k">5K</option>
+                      <option value="10k">10K</option>
+                      <option value="21k">Half Marathon</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Select all / none */}
+                <div style={{ display: 'flex', gap: 10, marginBottom: 10 }}>
+                  <button onClick={() => setSelectedIds(new Set(parsedWorkouts.map((_, i) => i)))}
+                    style={{ fontSize: 11, color: '#2ECC71', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
+                    Select all
+                  </button>
+                  <button onClick={() => setSelectedIds(new Set())}
+                    style={{ fontSize: 11, color: '#555', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
+                    Deselect all
+                  </button>
+                </div>
+
+                {/* Workout list */}
+                <div style={{ maxHeight: 260, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 }}>
+                  {parsedWorkouts.map((w, i) => (
+                    <div key={i}
+                      onClick={() => toggleSelect(i)}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
+                        background: selectedIds.has(i) ? '#FF6B6B0D' : '#0D0D0D',
+                        border: `1px solid ${selectedIds.has(i) ? '#FF6B6B33' : '#1a1a1a'}`,
+                        borderRadius: 10, cursor: 'pointer', transition: 'all 0.15s',
+                      }}>
+                      <div style={{
+                        width: 18, height: 18, borderRadius: 4, flexShrink: 0,
+                        background: selectedIds.has(i) ? '#FF6B6B' : '#1a1a1a',
+                        border: `1.5px solid ${selectedIds.has(i) ? '#FF6B6B' : '#333'}`,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: 11, color: '#000', fontWeight: 900,
+                      }}>{selectedIds.has(i) ? '✓' : ''}</div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                          <span style={{ fontWeight: 700, color: '#fff', fontSize: 13 }}>
+                            {w.workoutType} · {w.totalMinutes} min
+                          </span>
+                          <span style={{ fontSize: 11, color: '#555' }}>
+                            {new Date(w.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', gap: 10, marginTop: 3 }}>
+                          {w.distanceKm && <span style={styles.metaChip}>📍 {w.distanceKm}km</span>}
+                          {w.heartRateAvg && <span style={styles.metaChip}>❤️ {w.heartRateAvg}bpm</span>}
+                          {w.calories && <span style={styles.metaChip}>🔥 {w.calories}cal</span>}
+                          {w.pace && <span style={styles.metaChip}>⚡ {w.pace}</span>}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <button onClick={() => { setXmlState('idle'); setParsedWorkouts([]) }}
+                    style={{ ...styles.btn, background: '#222', flex: 1 }}>← Back</button>
+                  <button onClick={importSelected}
+                    disabled={selectedIds.size === 0}
+                    style={{ ...styles.btn, background: selectedIds.size > 0 ? '#FF6B6B' : '#2a2a2a', flex: 2, opacity: selectedIds.size === 0 ? 0.5 : 1 }}>
+                    Import {selectedIds.size} Workout{selectedIds.size !== 1 ? 's' : ''}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Manual Tab ── */}
+        {tab === 'manual' && (
+          <div>
+            <p style={{ color: '#666', fontSize: 12, marginBottom: 16 }}>
+              Manually enter a single workout from your Apple Health or any other source.
+            </p>
+            <div style={styles.formGrid}>
+              <label style={styles.label}>Program
+                <select value={form.goal} onChange={setField('goal')} style={styles.input}>
+                  <option value="5k">5K</option>
+                  <option value="10k">10K</option>
+                  <option value="21k">Half Marathon</option>
+                </select>
+              </label>
+              <label style={styles.label}>Date
+                <input type="date" value={form.date} onChange={setField('date')} style={styles.input} />
+              </label>
+              <label style={styles.label}>Week #
+                <input type="number" placeholder="e.g. 6" value={form.week} onChange={setField('week')} style={styles.input} min="1" max="20" />
+              </label>
+              <label style={styles.label}>Day #
+                <input type="number" placeholder="1–3" value={form.day} onChange={setField('day')} style={styles.input} min="1" max="3" />
+              </label>
+              <label style={styles.label}>Total Duration (min) *
+                <input type="number" placeholder="e.g. 35" value={form.totalMinutes} onChange={setField('totalMinutes')} style={styles.input} />
+              </label>
+              <label style={styles.label}>Run Time (min)
+                <input type="number" placeholder="e.g. 25" value={form.runMinutes} onChange={setField('runMinutes')} style={styles.input} />
+              </label>
+              <label style={styles.label}>Distance (km)
+                <input type="number" placeholder="e.g. 4.2" value={form.distanceKm} onChange={setField('distanceKm')} style={styles.input} step="0.1" />
+              </label>
+              <label style={styles.label}>Avg Heart Rate
+                <input type="number" placeholder="e.g. 148" value={form.heartRateAvg} onChange={setField('heartRateAvg')} style={styles.input} />
+              </label>
+              <label style={styles.label}>Max Heart Rate
+                <input type="number" placeholder="e.g. 172" value={form.heartRateMax} onChange={setField('heartRateMax')} style={styles.input} />
+              </label>
+              <label style={styles.label}>Calories
+                <input type="number" placeholder="e.g. 320" value={form.calories} onChange={setField('calories')} style={styles.input} />
+              </label>
+              <label style={styles.label}>Avg Pace (min/km)
+                <input type="text" placeholder="e.g. 5:30" value={form.pace} onChange={setField('pace')} style={styles.input} />
+              </label>
+              <label style={styles.label}>Walk Time (min)
+                <input type="number" placeholder="e.g. 5" value={form.walkMinutes} onChange={setField('walkMinutes')} style={styles.input} />
+              </label>
+            </div>
+            <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+              <button onClick={onClose} style={{ ...styles.btn, background: '#222', flex: 1 }}>Cancel</button>
+              <button onClick={submitManual} style={{ ...styles.btn, background: '#FF6B6B', flex: 2 }}>
+                + Add Workout
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -175,7 +573,7 @@ function WeeklyChart({ data }: { data: WorkoutRecord[][] }) {
 function RecentList({ workouts, onRemove }: { workouts: WorkoutRecord[]; onRemove: (id: string) => void }) {
   if (!workouts.length) return (
     <div style={{ color: '#444', fontSize: 14, textAlign: 'center', padding: '32px 0' }}>
-      No workouts yet. Complete a workout or import Apple Health data to get started.
+      No workouts yet. Complete a workout or upload your Apple Health XML to get started.
     </div>
   )
   return (
@@ -224,7 +622,7 @@ function TrainingZones({ workouts }: { workouts: WorkoutRecord[] }) {
   const withHR = workouts.filter(w => w.heartRateAvg)
   if (!withHR.length) return (
     <div style={{ color: '#444', fontSize: 13, padding: '16px 0' }}>
-      No heart rate data. Import Apple Health workouts with HR data to see training zones.
+      No heart rate data. Import Apple Health XML workouts with HR data to see training zones.
     </div>
   )
   const zones = [
@@ -283,7 +681,7 @@ export default function Dashboard() {
           {profileName ? `${profileName}'s Dashboard` : 'Dashboard'}
         </span>
         <button onClick={() => setShowImport(true)} style={styles.importBtn}>
-          🍎 Import Apple Health
+          🍎 Import Apple Health XML
         </button>
       </div>
 
@@ -402,9 +800,9 @@ export default function Dashboard() {
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                 <div style={{ fontSize: 28 }}>🍎</div>
                 <div>
-                  <div style={{ fontWeight: 700, color: '#fff', fontSize: 14 }}>Import Apple Health Data</div>
+                  <div style={{ fontWeight: 700, color: '#fff', fontSize: 14 }}>Import Apple Health XML</div>
                   <div style={{ fontSize: 12, color: '#555', marginTop: 3 }}>
-                    Add workouts from your Apple Watch or iPhone
+                    Upload your Apple Health export.xml to import all runs
                   </div>
                 </div>
                 <span style={{ marginLeft: 'auto', color: '#333', fontSize: 18 }}>→</span>
