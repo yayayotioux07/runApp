@@ -226,6 +226,17 @@ function AppleImportPanel({ onAdd, onClose }: { onAdd: (r: Omit<WorkoutRecord, '
   }
 
 
+  // Manual tab state
+  const [form, setForm] = useState({
+    goal: '10k' as GoalKey, week: '1', day: '1',
+    date: new Date().toISOString().slice(0, 10),
+    distanceKm: '', heartRateAvg: '', heartRateMax: '',
+    calories: '', pace: '', totalMinutes: '',
+    runMinutes: '', walkMinutes: '',
+  })
+  const setField = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+    setForm(f => ({ ...f, [k]: e.target.value }))
+
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault(); setDragOver(false)
     const file = e.dataTransfer.files[0]
