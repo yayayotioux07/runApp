@@ -141,6 +141,10 @@ export function useProgress() {
     }))
   }
 
+  const clearAppleWorkouts = () => {
+    setStore(s => ({ ...s, workouts: s.workouts.filter(w => w.source !== 'apple') }))
+  }
+
   // ─── Dashboard helpers ───────────────────────────────────────────
   const getRecentWorkouts = (limit = 10): WorkoutRecord[] => {
     return [...store.workouts]
@@ -187,6 +191,7 @@ export function useProgress() {
     isComplete,
     getNextWorkout,
     resetGoal,
+    clearAppleWorkouts,
     getRecentWorkouts,
     getWeeklyWorkouts,
     getTotalStats,

@@ -682,14 +682,16 @@ function TrainingZones({ workouts }: { workouts: WorkoutRecord[] }) {
 // ─── Main Dashboard ──────────────────────────────────────────────────
 export default function Dashboard() {
   const navigate = useNavigate()
-  const { profileName, workouts, getTotalStats, getRecentWorkouts, getWeeklyWorkouts, removeWorkout, addAppleWorkout } = useProgress()
+  const { profileName, workouts, getTotalStats, getRecentWorkouts, getWeeklyWorkouts, removeWorkout, addAppleWorkout, clearAppleWorkouts } = useProgress()
   const [showImport, setShowImport] = useState(false)
+  const [showClearConfirm, setShowClearConfirm] = useState(false)
   const [tab, setTab] = useState<'recent' | 'zones'>('recent')
 
   const stats = useMemo(() => getTotalStats(), [workouts])
   const recent = useMemo(() => getRecentWorkouts(12), [workouts])
   const weekly = useMemo(() => getWeeklyWorkouts(), [workouts])
 
+  const appleWorkoutCount = workouts.filter(w => w.source === 'apple').length
   const totalWorkoutsThisWeek = weekly.reduce((a, d) => a + d.length, 0)
 
   return (
@@ -700,9 +702,16 @@ export default function Dashboard() {
         <span style={styles.navTitle}>
           {profileName ? `${profileName}'s Dashboard` : 'Dashboard'}
         </span>
-        <button onClick={() => setShowImport(true)} style={styles.importBtn}>
-          🍎 Import Apple Health XML
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {appleWorkoutCount > 0 && (
+            <button onClick={() => setShowClearConfirm(true)} style={{ ...styles.importBtn, background: '#2a1a1a', color: '#FF6B6B', border: '1px solid #FF6B6B33' }}>
+              🗑 Clear XML Data
+            </button>
+          )}
+          <button onClick={() => setShowImport(true)} style={styles.importBtn}>
+            🍎 Import Apple Health XML
+          </button>
+        </div>
       </div>
 
       <div style={styles.content}>
@@ -831,6 +840,38 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* Clear Apple Data confirmation */}
+      {showClearConfirm && (
+        <div style={styles.overlay}>
+          <div style={{ ...styles.panel, maxWidth: 400, textAlign: 'center' }}>
+            <div style={{ fontSize: 40, marginBottom: 16 }}>⚠️</div>
+            <div style={{ fontWeight: 800, fontSize: 18, color: '#fff', marginBottom: 10 }}>
+              Clear all imported data?
+            </div>
+            <div style={{ color: '#888', fontSize: 13, lineHeight: 1.6, marginBottom: 8 }}>
+              This will permanently delete <strong style={{ color: '#FF6B6B' }}>{appleWorkoutCount} Apple Health workout{appleWorkoutCount !== 1 ? 's' : ''}</strong> from your dashboard.
+            </div>
+            <div style={{ color: '#555', fontSize: 12, marginBottom: 28 }}>
+              Your RunUp workouts and program progress will not be affected.
+            </div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button
+                onClick={() => setShowClearConfirm(false)}
+                style={{ ...styles.btn, background: '#1a1a1a', border: '1px solid #2a2a2a', flex: 1, fontSize: 14 }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => { clearAppleWorkouts(); setShowClearConfirm(false) }}
+                style={{ ...styles.btn, background: '#FF6B6B', flex: 1, fontSize: 14, fontWeight: 800 }}
+              >
+                Yes, delete all
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showImport && (
         <AppleImportPanel
