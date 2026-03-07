@@ -780,8 +780,8 @@ export default function Dashboard() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginTop: 16 }}>
                 {(['5k', '10k', '21k'] as GoalKey[]).map(goal => {
                   const meta = goalMeta[goal]
-                  const total = meta.weeks * 3
                   const done = Math.min(workouts.filter(w => w.goal === goal && w.week <= meta.weeks && w.day >= 1 && w.day <= 3).length, total)
+                  const total = meta.weeks * 3
                   const pct = Math.min((done / total) * 100, 100)
                   return (
                     <div key={goal} onClick={() => navigate(`/program/${goal}`)} style={{ cursor: 'pointer' }}>
