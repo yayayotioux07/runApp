@@ -47,9 +47,10 @@ export default function SegmentBar({ segments, activeIndex }: Props) {
   return (
     <div style={styles.bar}>
       {merged.map((seg) => {
-        const isActive = seg.originalIndices.includes(activeIndex)
-        const widthPct = (seg.duration / totalDuration) * 100
-        const bg = segmentColors[seg.type] ?? '#888'
+        const isActive  = seg.originalIndices.includes(activeIndex)
+        const isDone    = activeIndex > -1 && seg.originalIndices.every(i => i < activeIndex)
+        const widthPct  = (seg.duration / totalDuration) * 100
+        const bg        = segmentColors[seg.type] ?? '#888'
         const textColor = segmentTextColors[seg.type] ?? '#fff'
 
         return (
@@ -58,15 +59,30 @@ export default function SegmentBar({ segments, activeIndex }: Props) {
             style={{
               ...styles.segment,
               width: `${widthPct}%`,
-              background: bg,
-              opacity: isActive ? 1 : 0.55,
-              transform: isActive ? 'scaleY(1.08)' : 'scaleY(1)',
+              background: isDone
+                ? `linear-gradient(180deg, ${bg}99, ${bg}66)`
+                : bg,
+              opacity: (!isActive && !isDone && activeIndex > -1) ? 0.45 : 1,
+              transform: isActive ? 'scaleY(1.06)' : 'scaleY(1)',
               color: textColor,
-              boxShadow: isActive ? `0 0 12px ${bg}88` : 'none',
+              boxShadow: isActive ? `0 0 14px ${bg}99` : 'none',
+              borderRight: '1px solid rgba(0,0,0,0.2)',
             }}
           >
-            <span style={styles.segDuration}>{formatDuration(seg.duration)}</span>
-            <span style={styles.segLabel}>{seg.label}</span>
+            {isDone ? (
+              // Completed — show checkmark
+              <span style={{ ...styles.checkmark, color: textColor }}>✓</span>
+            ) : (
+              <>
+                <span style={styles.segDuration}>{formatDuration(seg.duration)}</span>
+                <span style={styles.segLabel}>{seg.label}</span>
+              </>
+            )}
+
+            {/* Subtle dark overlay on completed segments */}
+            {isDone && (
+              <div style={styles.doneTint} />
+            )}
           </div>
         )
       })}
@@ -87,11 +103,24 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     justifyContent: 'center',
     gap: '2px',
-    transition: 'opacity 0.3s, transform 0.3s, box-shadow 0.3s',
+    transition: 'opacity 0.4s, transform 0.3s, box-shadow 0.3s, background 0.4s',
     transformOrigin: 'bottom',
-    borderRight: '1px solid rgba(255,255,255,0.2)',
     minWidth: '0',
     overflow: 'hidden',
+    position: 'relative',
+  },
+  checkmark: {
+    fontSize: '22px',
+    fontWeight: '700',
+    lineHeight: 1,
+    position: 'relative',
+    zIndex: 1,
+  },
+  doneTint: {
+    position: 'absolute',
+    inset: 0,
+    background: 'rgba(0,0,0,0.25)',
+    pointerEvents: 'none',
   },
   segDuration: {
     fontSize: '15px',
