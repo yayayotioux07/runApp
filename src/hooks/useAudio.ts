@@ -1,7 +1,38 @@
+// iOS requires audio to be unlocked by a direct user gesture.
+// We pre-unlock both AudioContext and HTMLAudio on the first tap.
+
+let audioCtx: AudioContext | null = null
+let iosUnlocked = false
+
+function getAudioContext(): AudioContext {
+  if (!audioCtx) audioCtx = new AudioContext()
+  return audioCtx
+}
+
+// Call this once on the START button tap — unlocks all audio on iOS
+export function unlockAudio() {
+  if (iosUnlocked) return
+  try {
+    // Unlock AudioContext
+    const ctx = getAudioContext()
+    if (ctx.state === 'suspended') ctx.resume()
+
+    // Unlock HTMLAudio by playing a silent buffer
+    const silent = new Audio('/Alarm06.wav')
+    silent.volume = 0
+    silent.play().then(() => { silent.pause(); silent.currentTime = 0 }).catch(() => {})
+
+    iosUnlocked = true
+  } catch (e) {
+    console.warn('Audio unlock failed', e)
+  }
+}
+
 export function useAudio() {
   const beep = (frequency = 880, duration = 200) => {
     try {
-      const ctx = new AudioContext()
+      const ctx = getAudioContext()
+      if (ctx.state === 'suspended') ctx.resume()
       const osc = ctx.createOscillator()
       const gain = ctx.createGain()
       osc.connect(gain)
@@ -35,9 +66,16 @@ export function useAudio() {
       const audio = new Audio(src)
       audio.volume = 1
       if (onEnded) audio.addEventListener('ended', onEnded)
-      audio.play().catch(e => console.warn('WAV play failed', e))
+      const ctx = getAudioContext()
+      if (ctx.state === 'suspended') ctx.resume()
+      audio.play().catch(e => {
+        console.warn('WAV play failed', e)
+        // Fallback: still call onEnded so voice fires
+        if (onEnded) setTimeout(onEnded, 500)
+      })
     } catch (e) {
       console.warn('WAV not available', e)
+      if (onEnded) setTimeout(onEnded, 500)
     }
   }
 

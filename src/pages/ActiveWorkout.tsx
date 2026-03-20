@@ -1,6 +1,7 @@
 import { useNavigate, useParams } from 'react-router-dom'
 import { GoalKey, goalMeta, programs } from '../data/index'
 import { useTimer } from '../hooks/useTimer'
+import { unlockAudio } from '../hooks/useAudio'
 import { useProgress } from '../hooks/useProgress'
 import { useCallback, useState, useEffect, useRef } from 'react'
 
@@ -209,6 +210,7 @@ export default function ActiveWorkout() {
             style={styles.pauseBtn}
             onClick={() => {
               if (locked) return
+              unlockAudio()
               if (!hasStarted) start()
               else if (isRunning) pause()
               else resume()
