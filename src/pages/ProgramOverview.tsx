@@ -87,10 +87,31 @@ export default function ProgramOverview() {
             }}>
               <div style={styles.weekHeader}>
                 <span style={styles.weekLabel}>Week {week.week}</span>
-                <span style={{
-                  ...styles.weekProgress,
-                  color: weekAllDone ? meta.color : 'rgba(255,255,255,0.2)'
-                }}>{weekDone}/3 {weekAllDone ? '✓' : ''}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {!weekAllDone && (
+                    <button
+                      style={{
+                        fontSize: 10, fontWeight: 700, padding: '3px 8px',
+                        borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
+                        background: '#2ECC7118', color: '#2ECC71',
+                        border: '1px solid #2ECC7133',
+                      }}
+                      onClick={e => {
+                        e.stopPropagation()
+                        week.days.forEach(d => {
+                          if (!isComplete(key, week.week, d.day))
+                            markComplete(key, week.week, d.day)
+                        })
+                      }}
+                    >
+                      ✓ Mark week done
+                    </button>
+                  )}
+                  <span style={{
+                    ...styles.weekProgress,
+                    color: weekAllDone ? meta.color : 'rgba(255,255,255,0.2)'
+                  }}>{weekDone}/3 {weekAllDone ? '✓' : ''}</span>
+                </div>
               </div>
               <div style={styles.dayRow}>
                 {week.days.map(d => {
