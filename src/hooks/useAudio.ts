@@ -30,7 +30,18 @@ export function useAudio() {
     }
   }
 
-  // Fires at the END of a segment — two descending beeps
+  const playWav = (src: string, onEnded?: () => void) => {
+    try {
+      const audio = new Audio(src)
+      audio.volume = 1
+      if (onEnded) audio.addEventListener('ended', onEnded)
+      audio.play().catch(e => console.warn('WAV play failed', e))
+    } catch (e) {
+      console.warn('WAV not available', e)
+    }
+  }
+
+  // Fires at the END of a segment — WAV then voice
   const announceSegmentEnd = (type: string) => {
     const messages: Record<string, string> = {
       warmup:   'Warm up done.',
@@ -38,9 +49,7 @@ export function useAudio() {
       walk:     'Walk done.',
       cooldown: 'Cool down complete.',
     }
-    beep(880, 150)
-    setTimeout(() => beep(660, 250), 180)
-    setTimeout(() => speak(messages[type] ?? 'Segment done.'), 500)
+    playWav('/Alarm06.wav', () => speak(messages[type] ?? 'Segment done.'))
   }
 
   // Fires at the START of a segment — single beep + voice
