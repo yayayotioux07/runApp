@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { GoalKey, goalMeta, programs } from '../data/index'
 import { useProgress } from '../hooks/useProgress'
@@ -5,7 +6,8 @@ import { useProgress } from '../hooks/useProgress'
 export default function ProgramOverview() {
   const { goal } = useParams<{ goal: GoalKey }>()
   const navigate  = useNavigate()
-  const { isComplete, profileName, getNextWorkout } = useProgress()
+  const { isComplete, markComplete, profileName, getNextWorkout } = useProgress()
+  const [tapped, setTapped] = useState<string | null>(null) // "w1d2" format
 
   const key     = goal as GoalKey
   const meta    = goalMeta[key]
@@ -18,8 +20,21 @@ export default function ProgramOverview() {
   const pct           = Math.round((completedDays / totalDays) * 100)
   const next          = getNextWorkout(key, meta.weeks)
 
+  const handleDayTap = (week: number, day: number, done: boolean) => {
+    const k = `w${week}d${day}`
+    if (done) return // already done — tapping does nothing
+    if (tapped === k) {
+      // Second tap — mark complete
+      markComplete(key, week, day)
+      setTapped(null)
+    } else {
+      // First tap — show confirm options
+      setTapped(k)
+    }
+  }
+
   return (
-    <div style={styles.page}>
+    <div style={styles.page} onClick={() => setTapped(null)}>
       {/* Header */}
       <div style={styles.header}>
         <button style={styles.backBtn} onClick={() => navigate('/')}>← Back</button>
@@ -64,32 +79,78 @@ export default function ProgramOverview() {
       <div style={styles.weekList}>
         {program.map(week => {
           const weekDone = week.days.filter(d => isComplete(key, week.week, d.day)).length
+          const weekAllDone = weekDone === week.days.length
           return (
-            <div key={week.week} style={styles.weekBlock}>
+            <div key={week.week} style={{
+              ...styles.weekBlock,
+              borderColor: weekAllDone ? meta.color + '33' : '#1e1e1e',
+            }}>
               <div style={styles.weekHeader}>
                 <span style={styles.weekLabel}>Week {week.week}</span>
-                <span style={styles.weekProgress}>{weekDone}/3</span>
+                <span style={{
+                  ...styles.weekProgress,
+                  color: weekAllDone ? meta.color : 'rgba(255,255,255,0.2)'
+                }}>{weekDone}/3 {weekAllDone ? '✓' : ''}</span>
               </div>
               <div style={styles.dayRow}>
                 {week.days.map(d => {
                   const done    = isComplete(key, week.week, d.day)
                   const isNext  = next?.week === week.week && next?.day === d.day
                   const mins    = Math.round(d.segments.reduce((a, s) => a + s.duration, 0) / 60)
+                  const tapKey  = `w${week.week}d${d.day}`
+                  const isTapped = tapped === tapKey
+
                   return (
-                    <button
-                      key={d.day}
-                      style={{
-                        ...styles.dayCard,
-                        borderColor: done ? meta.color : isNext ? meta.color + '66' : '#222',
-                        background:  done ? meta.color + '18' : isNext ? meta.color + '0D' : '#161616',
-                      }}
-                      onClick={() => navigate(`/workout/${key}/${week.week}/${d.day}`)}
-                    >
-                      <span style={{ ...styles.dayIcon, color: done ? meta.color : isNext ? meta.color : 'rgba(255,255,255,0.2)' }}>
-                        {done ? '✓' : isNext ? '▶' : `D${d.day}`}
-                      </span>
-                      <span style={styles.dayMins}>{mins}m</span>
-                    </button>
+                    <div key={d.day} style={{ position: 'relative' }}>
+                      <button
+                        style={{
+                          ...styles.dayCard,
+                          borderColor: done ? '#2ECC71' : isTapped ? meta.color : isNext ? meta.color + '66' : '#222',
+                          background:  done ? '#2ECC7118' : isTapped ? meta.color + '22' : isNext ? meta.color + '0D' : '#161616',
+                          width: '100%',
+                        }}
+                        onClick={e => { e.stopPropagation(); handleDayTap(week.week, d.day, done) }}
+                      >
+                        {/* Icon */}
+                        <span style={{
+                          fontSize: done ? 18 : 15,
+                          fontWeight: 700,
+                          color: done ? '#2ECC71' : isTapped ? meta.color : isNext ? meta.color : 'rgba(255,255,255,0.2)'
+                        }}>
+                          {done ? '✓' : isNext ? '▶' : `D${d.day}`}
+                        </span>
+
+                        {/* Label */}
+                        <span style={{
+                          fontSize: 10,
+                          fontWeight: done ? 700 : 400,
+                          color: done ? '#2ECC71' : 'rgba(255,255,255,0.25)'
+                        }}>
+                          {done ? 'Done' : `${mins}m`}
+                        </span>
+                      </button>
+
+                      {/* Confirm popup on first tap */}
+                      {isTapped && (
+                        <div style={styles.popup} onClick={e => e.stopPropagation()}>
+                          <div style={{ fontSize: 11, color: '#888', marginBottom: 8, textAlign: 'center' }}>
+                            Day {d.day} · {mins}m
+                          </div>
+                          <button
+                            style={{ ...styles.popupBtn, background: meta.color + '22', color: meta.color, borderColor: meta.color + '44' }}
+                            onClick={e => { e.stopPropagation(); navigate(`/workout/${key}/${week.week}/${d.day}`) }}
+                          >
+                            ▶ Start workout
+                          </button>
+                          <button
+                            style={{ ...styles.popupBtn, background: '#2ECC7118', color: '#2ECC71', borderColor: '#2ECC7133' }}
+                            onClick={e => { e.stopPropagation(); markComplete(key, week.week, d.day); setTapped(null) }}
+                          >
+                            ✓ Mark as done
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   )
                 })}
               </div>
@@ -213,9 +274,10 @@ const styles: Record<string, React.CSSProperties> = {
   },
   weekBlock: {
     background: '#161616',
-    border: '1px solid #1e1e1e',
+    border: '1px solid',
     borderRadius: '12px',
     padding: '14px',
+    transition: 'border-color 0.3s',
   },
   weekHeader: {
     display: 'flex',
@@ -232,7 +294,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   weekProgress: {
     fontSize: '11px',
-    color: 'rgba(255,255,255,0.2)',
+    transition: 'color 0.3s',
   },
   dayRow: {
     display: 'grid',
@@ -248,14 +310,32 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     gap: '4px',
     cursor: 'pointer',
-    transition: 'border-color 0.2s',
+    transition: 'all 0.15s',
   },
-  dayIcon: {
-    fontSize: '15px',
-    fontWeight: '700',
+  popup: {
+    position: 'absolute',
+    top: 'calc(100% + 6px)',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    background: '#1a1a1a',
+    border: '1px solid #2a2a2a',
+    borderRadius: 12,
+    padding: '12px',
+    zIndex: 100,
+    width: 160,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+    boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
   },
-  dayMins: {
-    fontSize: '11px',
-    color: 'rgba(255,255,255,0.25)',
+  popupBtn: {
+    border: '1px solid',
+    borderRadius: 8,
+    padding: '8px 10px',
+    fontSize: 12,
+    fontWeight: 700,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    textAlign: 'center',
   },
 }
