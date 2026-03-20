@@ -34,6 +34,9 @@ export default function ActiveWorkout() {
   const { markComplete } = useProgress()
   const [locked, setLocked] = useState(false)
   const [elapsedTotal, setElapsedTotal] = useState(0)
+  const workoutStartRef = useRef<number | null>(null)   // wall-clock start
+  const pausedAtRef = useRef<number>(0)                 // accumulated paused seconds
+  const pauseStartRef = useRef<number | null>(null)     // when current pause began
   const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const key = goal as GoalKey
@@ -73,14 +76,27 @@ export default function ActiveWorkout() {
     skipPrev,
   } = useTimer(dayData?.segments ?? [], handleComplete)
 
-  // Track total elapsed time
+  // Track total elapsed time using wall clock — survives tab switches
   useEffect(() => {
     if (isRunning) {
-      elapsedRef.current = setInterval(() => setElapsedTotal(t => t + 1), 1000)
+      // First start
+      if (!workoutStartRef.current) workoutStartRef.current = Date.now()
+      // Coming back from pause — accumulate how long we were paused
+      if (pauseStartRef.current) {
+        pausedAtRef.current += (Date.now() - pauseStartRef.current) / 1000
+        pauseStartRef.current = null
+      }
+      elapsedRef.current = setInterval(() => {
+        if (!workoutStartRef.current) return
+        const totalElapsed = (Date.now() - workoutStartRef.current) / 1000 - pausedAtRef.current
+        setElapsedTotal(Math.floor(totalElapsed))
+      }, 250)
     } else {
-      if (elapsedRef.current) clearInterval(elapsedRef.current)
+      if (elapsedRef.current) { clearInterval(elapsedRef.current); elapsedRef.current = null }
+      // Record when pause started
+      if (workoutStartRef.current) pauseStartRef.current = Date.now()
     }
-    return () => { if (elapsedRef.current) clearInterval(elapsedRef.current) }
+    return () => { if (elapsedRef.current) { clearInterval(elapsedRef.current); elapsedRef.current = null } }
   }, [isRunning])
 
   if (!meta || !dayData) { navigate('/'); return null }
@@ -108,7 +124,7 @@ export default function ActiveWorkout() {
       {/* Top bar */}
       <div style={styles.topBar}>
         <button style={styles.topBtn} onClick={() => navigate(`/workout/${key}/${weekNum}/${dayNum}`)}>✕</button>
-        <button style={styles.topBtn} onClick={() => { reset(); setElapsedTotal(0) }}>↺</button>
+        <button style={styles.topBtn} onClick={() => { reset(); setElapsedTotal(0); workoutStartRef.current = null; pausedAtRef.current = 0; pauseStartRef.current = null }}>↺</button>
         <button style={styles.topBtn}>♪</button>
       </div>
 
