@@ -8,7 +8,7 @@ export function useTimer(segments: Segment[], onComplete: () => void) {
   const [isRunning, setIsRunning] = useState(false)
   const [isFinished, setIsFinished] = useState(false)
 
-  const { announceSegment, announceCountdown, announceFinish } = useAudio()
+  const { announceSegment, announceSegmentEnd, announceCountdown, announceFinish } = useAudio()
 
   // Wall-clock refs — these never go stale in the interval callback
   const segmentIndexRef  = useRef(0)
@@ -68,7 +68,10 @@ export function useTimer(segments: Segment[], onComplete: () => void) {
       }
 
       if (remaining <= 0) {
-        // Advance to next segment
+        // Beep + announce end of current segment, then advance
+        const currentType = segments[segmentIndexRef.current]?.type ?? ''
+        const isLast = segmentIndexRef.current >= segments.length - 1
+        if (!isLast) announceSegmentEnd(currentType)
         goToSegment(segmentIndexRef.current + 1, true)
       } else {
         setTimeLeft(remainingInt)

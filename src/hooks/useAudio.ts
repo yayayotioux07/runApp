@@ -30,6 +30,20 @@ export function useAudio() {
     }
   }
 
+  // Fires at the END of a segment — two descending beeps
+  const announceSegmentEnd = (type: string) => {
+    const messages: Record<string, string> = {
+      warmup:   'Warm up done.',
+      run:      'Run complete.',
+      walk:     'Walk done.',
+      cooldown: 'Cool down complete.',
+    }
+    beep(880, 150)
+    setTimeout(() => beep(660, 250), 180)
+    setTimeout(() => speak(messages[type] ?? 'Segment done.'), 500)
+  }
+
+  // Fires at the START of a segment — single beep + voice
   const announceSegment = (type: string, duration: number) => {
     const mins = Math.floor(duration / 60)
     const secs = duration % 60
@@ -60,5 +74,5 @@ export function useAudio() {
     setTimeout(() => speak('Workout complete! Great job!'), 800)
   }
 
-  return { beep, speak, announceSegment, announceCountdown, announceFinish }
+  return { beep, speak, announceSegment, announceSegmentEnd, announceCountdown, announceFinish }
 }
