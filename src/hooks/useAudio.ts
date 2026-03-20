@@ -1,27 +1,55 @@
-// iOS requires audio to be unlocked by a direct user gesture.
-// We pre-unlock both AudioContext and HTMLAudio on the first tap.
-
+// Single shared AudioContext for all sounds — avoids iOS session conflicts
 let audioCtx: AudioContext | null = null
+let wavBuffer: AudioBuffer | null = null
 let iosUnlocked = false
 
-function getAudioContext(): AudioContext {
+function getCtx(): AudioContext {
   if (!audioCtx) audioCtx = new AudioContext()
   return audioCtx
 }
 
-// Call this once on the START button tap — unlocks all audio on iOS
+// Pre-load the WAV into an AudioBuffer so it plays through AudioContext
+async function loadWav(src: string) {
+  if (wavBuffer) return
+  try {
+    const ctx = getCtx()
+    const res = await fetch(src)
+    const arrayBuffer = await res.arrayBuffer()
+    wavBuffer = await ctx.decodeAudioData(arrayBuffer)
+  } catch (e) {
+    console.warn('WAV preload failed', e)
+  }
+}
+
+function playBuffer(buffer: AudioBuffer, onEnded?: () => void) {
+  try {
+    const ctx = getCtx()
+    const source = ctx.createBufferSource()
+    source.buffer = buffer
+    source.connect(ctx.destination)
+    if (onEnded) source.addEventListener('ended', onEnded)
+    source.start(0)
+  } catch (e) {
+    console.warn('Buffer play failed', e)
+    if (onEnded) setTimeout(onEnded, 500)
+  }
+}
+
+// Call on START button tap — unlocks AudioContext on iOS
 export function unlockAudio() {
   if (iosUnlocked) return
   try {
-    // Unlock AudioContext
-    const ctx = getAudioContext()
+    const ctx = getCtx()
+    // Resume suspended context
     if (ctx.state === 'suspended') ctx.resume()
-
-    // Unlock HTMLAudio by playing a silent buffer
-    const silent = new Audio('/Alarm06.wav')
-    silent.volume = 0
-    silent.play().then(() => { silent.pause(); silent.currentTime = 0 }).catch(() => {})
-
+    // Play a silent buffer — this is the iOS unlock gesture trick
+    const buf = ctx.createBuffer(1, 1, 22050)
+    const src = ctx.createBufferSource()
+    src.buffer = buf
+    src.connect(ctx.destination)
+    src.start(0)
+    // Preload WAV now while we have the user gesture
+    loadWav('/Alarm06.wav')
     iosUnlocked = true
   } catch (e) {
     console.warn('Audio unlock failed', e)
@@ -31,7 +59,7 @@ export function unlockAudio() {
 export function useAudio() {
   const beep = (frequency = 880, duration = 200) => {
     try {
-      const ctx = getAudioContext()
+      const ctx = getCtx()
       if (ctx.state === 'suspended') ctx.resume()
       const osc = ctx.createOscillator()
       const gain = ctx.createGain()
@@ -44,7 +72,7 @@ export function useAudio() {
       osc.start(ctx.currentTime)
       osc.stop(ctx.currentTime + duration / 1000)
     } catch (e) {
-      console.warn('Audio not available', e)
+      console.warn('Beep failed', e)
     }
   }
 
@@ -57,29 +85,11 @@ export function useAudio() {
       utterance.volume = 1
       window.speechSynthesis.speak(utterance)
     } catch (e) {
-      console.warn('Speech not available', e)
+      console.warn('Speech failed', e)
     }
   }
 
-  const playWav = (src: string, onEnded?: () => void) => {
-    try {
-      const audio = new Audio(src)
-      audio.volume = 1
-      if (onEnded) audio.addEventListener('ended', onEnded)
-      const ctx = getAudioContext()
-      if (ctx.state === 'suspended') ctx.resume()
-      audio.play().catch(e => {
-        console.warn('WAV play failed', e)
-        // Fallback: still call onEnded so voice fires
-        if (onEnded) setTimeout(onEnded, 500)
-      })
-    } catch (e) {
-      console.warn('WAV not available', e)
-      if (onEnded) setTimeout(onEnded, 500)
-    }
-  }
-
-  // Fires at the END of a segment — WAV then voice
+  // Fires at END of segment — WAV (via AudioContext) then voice
   const announceSegmentEnd = (type: string) => {
     const messages: Record<string, string> = {
       warmup:   'Warm up done.',
@@ -87,10 +97,18 @@ export function useAudio() {
       walk:     'Walk done.',
       cooldown: 'Cool down complete.',
     }
-    playWav('/Alarm06.wav', () => speak(messages[type] ?? 'Segment done.'))
+    const announce = () => speak(messages[type] ?? 'Segment done.')
+    if (wavBuffer) {
+      playBuffer(wavBuffer, announce)
+    } else {
+      // WAV not loaded yet — fallback to beeps
+      beep(880, 150)
+      setTimeout(() => beep(660, 250), 180)
+      setTimeout(announce, 600)
+    }
   }
 
-  // Fires at the START of a segment — single beep + voice
+  // Fires at START of segment — beep + voice
   const announceSegment = (type: string, duration: number) => {
     const mins = Math.floor(duration / 60)
     const secs = duration % 60

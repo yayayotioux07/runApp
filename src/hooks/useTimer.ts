@@ -81,21 +81,61 @@ export function useTimer(segments: Segment[], onComplete: () => void) {
     return clearTick
   }, [isRunning, goToSegment, announceCountdown])
 
-  // Handle tab visibility — recalculate immediately when tab becomes visible
+  // Handle tab becoming visible — jump to correct segment even if multiple passed
   useEffect(() => {
     const onVisible = () => {
+      if (document.visibilityState !== 'visible') return
       if (!isRunningRef.current || !segmentStartRef.current) return
-      const elapsedSecs = (Date.now() - segmentStartRef.current) / 1000
-      const remaining = Math.max(0, segmentDurRef.current - elapsedSecs)
-      if (remaining <= 0) {
-        goToSegment(segmentIndexRef.current + 1, true)
+
+      // Calculate total elapsed since this segment started
+      const elapsedSinceSegmentStart = (Date.now() - segmentStartRef.current) / 1000
+
+      // Walk forward through segments until we find where we actually are
+      let remaining = elapsedSinceSegmentStart
+      let idx = segmentIndexRef.current
+
+      while (remaining > 0 && idx < segments.length) {
+        const segDur = idx === segmentIndexRef.current
+          ? segmentDurRef.current   // current segment may be partially elapsed
+          : segments[idx].duration
+        if (remaining >= segDur) {
+          remaining -= segDur
+          idx++
+        } else {
+          break
+        }
+      }
+
+      if (idx >= segments.length) {
+        // Workout finished while backgrounded
+        clearTick()
+        setIsFinished(true)
+        setIsRunning(false)
+        isRunningRef.current = false
+        announceFinish()
+        onComplete()
+        return
+      }
+
+      if (idx !== segmentIndexRef.current) {
+        // We skipped one or more segments — jump directly to correct one
+        const timeLeftInSegment = segments[idx].duration - remaining
+        segmentIndexRef.current = idx
+        segmentDurRef.current = timeLeftInSegment
+        segmentStartRef.current = Date.now()
+        countdownFiredRef.current = timeLeftInSegment <= 4
+        setSegmentIndex(idx)
+        setTimeLeft(Math.ceil(timeLeftInSegment))
+        announceSegment(segments[idx].type, segments[idx].duration)
       } else {
-        setTimeLeft(Math.ceil(remaining))
+        // Still in same segment, just update display
+        const segRemaining = Math.max(0, segmentDurRef.current - elapsedSinceSegmentStart)
+        setTimeLeft(Math.ceil(segRemaining))
       }
     }
     document.addEventListener('visibilitychange', onVisible)
     return () => document.removeEventListener('visibilitychange', onVisible)
-  }, [goToSegment])
+  }, [goToSegment, segments, announceFinish, announceSegment, onComplete])
 
   const start = () => {
     segmentStartRef.current = Date.now()
