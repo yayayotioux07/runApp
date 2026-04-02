@@ -149,8 +149,8 @@ export const program10k: ProgramWeek[] = [
   // Week 8: PDF pages 9-11
   { week: 8, days: [
     { day: 1, segments: [warmup, run(23), walk(3), run(5), cooldown] },           // page 9:  23R+3W+5R
-    { day: 2, segments: [warmup, run(25), walk(2), run(7), cooldown] },           // page 10: 25R+2W+7R
-    { day: 3, segments: [warmup, run(30), walk(2), run(5), cooldown] },           // page 11: 30R+2W+5R
+    { day: 2, segments: [warmup, run(9), walk(1), run(9), walk(1), run(7), walk(3), cooldown] }, // 9R+1W+9R+1W+7R+3W
+    { day: 3, segments: [warmup, run(9), walk(1), run(9), walk(1), run(9), walk(1), cooldown] }, // 9R+1W+9R+1W+9R+1W
   ]},
   // Week 9: PDF pages 12-14
   { week: 9, days: [
